@@ -6,13 +6,56 @@
 !/.song_cache/.gitkeep
 
 #agent files
-AGENTS.md 
+AGENTS.md
 CLAUDE.md
 
 #planning
 /STATUS
 
-# dependencies
+#downloadable dependencies
+/backend/processing/vggish
+!/backend/processing/vggish/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.manifest
+*.spec
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Frontend - Next.js
+/frontend/node_modules
+/frontend/.next/
+/frontend/out/
+/frontend/.pnp
+/frontend/.pnp.js
+/frontend/coverage
+/frontend/*.tsbuildinfo
+/frontend/next-env.d.ts
+
+# Node.js (root level if needed)
 /node_modules
 /.pnp
 .pnp.js
@@ -20,12 +63,10 @@ CLAUDE.md
 # testing
 /coverage
 
-# next.js
-/.next/
-/out/
-
 # production
 /build
+/dist
+/dist-electron
 
 # misc
 .DS_Store
@@ -35,6 +76,7 @@ CLAUDE.md
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+*.log
 
 # local env files
 .env*.local
@@ -43,6 +85,9 @@ yarn-error.log*
 # vercel
 .vercel
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

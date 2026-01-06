@@ -1,0 +1,63 @@
+{
+  "name": "songbase",
+  "version": "1.0.0",
+  "description": "A personalized music streaming platform",
+  "main": "electron/main.js",
+  "scripts": {
+    "electron:dev": "electron .",
+    "electron:build": "electron-builder",
+    "build:all": "./scripts/build_desktop.sh"
+  },
+  "build": {
+    "appId": "com.songbase.app",
+    "productName": "Songbase",
+    "directories": {
+      "output": "dist-electron"
+    },
+    "files": [
+      "electron/**/*",
+      "frontend/out/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/songbase-api",
+        "to": "backend/songbase-api"
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.music",
+      "icon": "frontend/public/icon.png",
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "icon": "frontend/public/icon.png",
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "category": "Audio",
+      "icon": "frontend/public/icon.png",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.1.0",
+    "electron-builder": "^24.9.1"
+  },
+  "keywords": [
+    "music",
+    "streaming",
+    "audio",
+    "electron"
+  ],
+  "author": "",
+  "license": "MIT"
+}
