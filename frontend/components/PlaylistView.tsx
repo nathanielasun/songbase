@@ -49,7 +49,7 @@ export default function PlaylistView({
         <h1 className="text-4xl font-bold text-white">Your Playlists</h1>
         <button
           onClick={() => setIsCreating(true)}
-          className="px-6 py-2 bg-green-500 text-white rounded-full hover:bg-green-600 transition-colors font-semibold"
+          className="px-6 py-2 bg-pink-500 text-white rounded-full hover:bg-pink-600 transition-colors font-semibold"
         >
           Create Playlist
         </button>
@@ -65,13 +65,13 @@ export default function PlaylistView({
               value={newPlaylistName}
               onChange={(e) => setNewPlaylistName(e.target.value)}
               placeholder="Playlist name"
-              className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-green-500"
+              className="flex-1 px-4 py-2 bg-gray-700 text-white rounded-md focus:outline-none focus:ring-2 focus:ring-pink-500"
               onKeyPress={(e) => e.key === 'Enter' && handleCreate()}
               autoFocus
             />
             <button
               onClick={handleCreate}
-              className="px-6 py-2 bg-green-500 text-white rounded-md hover:bg-green-600 transition-colors"
+              className="px-6 py-2 bg-pink-500 text-white rounded-md hover:bg-pink-600 transition-colors"
             >
               Create
             </button>
@@ -103,7 +103,7 @@ export default function PlaylistView({
                   onChange={(e) => setEditName(e.target.value)}
                   onBlur={() => handleRename(playlist.id)}
                   onKeyPress={(e) => e.key === 'Enter' && handleRename(playlist.id)}
-                  className="flex-1 px-2 py-1 bg-gray-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-green-500"
+                  className="flex-1 px-2 py-1 bg-gray-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-pink-500"
                   autoFocus
                 />
               ) : (

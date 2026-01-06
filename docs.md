@@ -24,10 +24,16 @@ songbase/
 │   │   ├── migrations/
 │   │   │   ├── 001_init.sql  - Metadata + embeddings schema with pgvector
 │   │   │   ├── 002_add_metadata_verification.sql - Adds verification metadata columns
-│   │   │   └── 003_add_download_queue.sql - Adds download queue table
+│   │   │   ├── 003_add_download_queue.sql - Adds download queue table
+│   │   │   └── 004_update_download_queue.sql - Adds queue tracking fields
 │   │   ├── connection.py     - Postgres connection helper
+│   │   ├── embeddings.py     - Shared pgvector ingestion helpers
+│   │   ├── image_connection.py - Image DB connection helper
+│   │   ├── image_migrations/
+│   │   │   └── 001_init.sql  - Image assets + profile schema
 │   │   ├── ingest.py         - MP3 metadata + embeddings ingestion CLI
-│   │   └── migrate.py        - Migration runner
+│   │   ├── migrate.py        - Migration runner
+│   │   └── migrate_images.py - Image DB migration runner
 │   └── processing/    # Audio processing modules
 │       ├── bin/
 │       │   └── .gitkeep      - Placeholder for bundled ffmpeg binary
@@ -61,13 +67,20 @@ songbase/
 │       │   ├── __init__.py       - Package entry point for verification helpers
 │       │   ├── cli.py            - CLI for MusicBrainz verification
 │       │   ├── config.py         - MusicBrainz configuration defaults
+│       │   ├── image_cli.py       - CLI for cover art + artist profiles
+│       │   ├── image_db.py        - Image DB helpers
+│       │   ├── image_pipeline.py  - Cover art + artist profile ingestion
 │       │   ├── musicbrainz_client.py - MusicBrainz API wrapper
 │       │   └── pipeline.py       - Unverified song verification flow
 │       ├── vggish/
 │       │   └── .gitkeep       - Placeholder for VGGish files
 │       ├── dependencies.py    - Ensures local package dependencies are present
 │       ├── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
-│       └── orchestrator.py    - End-to-end processing pipeline runner
+│       ├── orchestrator.py    - End-to-end processing pipeline runner
+│       ├── pipeline_state.py  - Pipeline state JSONL utilities
+│       └── storage_utils.py   - Hashed cache path + atomic moves
+├── backend/tests/
+│   └── test_orchestrator_integration.py - End-to-end pipeline smoke test (opt-in)
 ├── scripts/
 │   └── build_unix.sh     - Builds standalone binary with bundled ffmpeg
 ├── songs/               # Music library (MP3 files)
@@ -175,6 +188,20 @@ try {
   ```
 - **Embedding Notes**: If `--embedding-dir` is set, it should contain `{sha_id}.npz` files with `embedding` or `postprocessed` arrays.
 
+### backend/db/embeddings.py
+- **Purpose**: Shared pgvector embedding ingestion helpers (used by ingest + orchestrator).
+- **Usage**: Imported by pipeline code when inserting VGGish embeddings.
+
+## Image Metadata DB (Separate Postgres)
+
+### backend/db/migrate_images.py
+- **Purpose**: Apply schema migrations for cover art and artist profiles.
+- **Requires**: `SONGBASE_IMAGE_DATABASE_URL` set to a Postgres connection string.
+- **Usage**:
+  ```bash
+  SONGBASE_IMAGE_DATABASE_URL=postgres://... python backend/db/migrate_images.py
+  ```
+
 ## Backend Processing Modules
 
 ### backend/processing/mp3_to_pcm.py
@@ -194,6 +221,17 @@ try {
   SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
   ```
 - **Notes**: Appends progress events to `preprocessed_cache/pipeline_state.jsonl`.
+- **Optional**: Add `--images` to sync cover art and artist profiles (requires `SONGBASE_IMAGE_DATABASE_URL`).
+
+### backend/processing/pipeline_state.py
+- **Purpose**: Append-only pipeline state writer and compaction utility.
+- **Usage**:
+  ```bash
+  python backend/processing/pipeline_state.py --compact
+  ```
+
+### backend/processing/storage_utils.py
+- **Purpose**: Shared `.song_cache/` path helpers and atomic move utility.
 
 ### backend/processing/audio_pipeline/
 - **Purpose**: Structured WAV-to-embedding pipeline with modular components
@@ -241,10 +279,13 @@ try {
   ```
 
 ### backend/processing/metadata_pipeline/
-- **Purpose**: Verify and enrich unverified songs via MusicBrainz
+- **Purpose**: Verify and enrich unverified songs via MusicBrainz, plus image/profile sourcing.
 - **Key Modules**:
   - `cli.py`: Command-line interface for verification
   - `config.py`: MusicBrainz configuration defaults
+  - `image_cli.py`: Cover art + artist profile CLI
+  - `image_db.py`: Image DB helpers
+  - `image_pipeline.py`: Cover art + artist profile ingestion
   - `musicbrainz_client.py`: MusicBrainz API wrapper
   - `pipeline.py`: Unverified song verification flow
 
@@ -254,6 +295,26 @@ try {
 - **Usage**:
   ```bash
   SONGBASE_DATABASE_URL=postgres://... python backend/processing/metadata_pipeline/cli.py --limit 100
+  ```
+
+### backend/processing/metadata_pipeline/image_cli.py
+- **Purpose**: Fetch cover art and artist profiles into the image database.
+- **Requires**: `SONGBASE_DATABASE_URL` and `SONGBASE_IMAGE_DATABASE_URL` set, plus musicbrainzngs.
+- **Usage**:
+  ```bash
+  SONGBASE_DATABASE_URL=postgres://... SONGBASE_IMAGE_DATABASE_URL=postgres://... \
+    python backend/processing/metadata_pipeline/image_cli.py --limit-songs 100
+  ```
+
+## Testing
+
+### backend/tests/test_orchestrator_integration.py
+- **Purpose**: Opt-in end-to-end smoke test for the processing orchestrator.
+- **Requires**: `SONGBASE_DATABASE_URL`, `SONGBASE_TEST_MP3`, ffmpeg, and VGGish assets.
+- **Usage**:
+  ```bash
+  SONGBASE_INTEGRATION_TEST=1 SONGBASE_TEST_MP3=/path/to/file.mp3 \
+    SONGBASE_DATABASE_URL=postgres://... python -m unittest backend.tests.test_orchestrator_integration
   ```
 
 ### backend/processing/acquisition_pipeline/

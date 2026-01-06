@@ -10,10 +10,8 @@ from typing import Iterable
 if __package__ is None:  # Allow running as a script.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
-from pgvector import Vector
-
 from backend.db.connection import get_connection
+from backend.db.embeddings import default_preprocess_version, insert_vggish_embeddings
 from backend.processing.audio_pipeline import config as vggish_config
 
 
@@ -229,71 +227,6 @@ def _insert_relations(cur, sha_id: str, metadata: dict) -> None:
         )
 
 
-def _load_embeddings(npz_path: Path) -> np.ndarray:
-    data = np.load(npz_path)
-    if "embedding" in data:
-        embeddings = data["embedding"]
-    elif "postprocessed" in data:
-        embeddings = data["postprocessed"]
-    else:
-        raise ValueError("Embedding file missing 'embedding' or 'postprocessed' arrays")
-
-    if embeddings.ndim == 1:
-        embeddings = embeddings.reshape(1, -1)
-    if embeddings.shape[1] != vggish_config.VGGISH_EMBEDDING_SIZE:
-        raise ValueError("Embedding dimension mismatch")
-
-    return embeddings.astype(np.float32)
-
-
-def _insert_embeddings(
-    cur,
-    sha_id: str,
-    npz_path: Path,
-    model_name: str,
-    model_version: str,
-    preprocess_version: str,
-) -> int:
-    embeddings = _load_embeddings(npz_path)
-    hop = float(vggish_config.VGGISH_HOP_SEC)
-    frame = float(vggish_config.VGGISH_FRAME_SEC)
-
-    rows = []
-    for idx, vector in enumerate(embeddings):
-        start = idx * hop
-        end = start + frame
-        rows.append(
-            (
-                sha_id,
-                model_name,
-                model_version,
-                preprocess_version,
-                Vector(vector),
-                start,
-                end,
-            )
-        )
-
-    cur.executemany(
-        """
-        INSERT INTO embeddings.vggish_embeddings (
-            sha_id,
-            model_name,
-            model_version,
-            preprocess_version,
-            vector,
-            segment_start_sec,
-            segment_end_sec
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-        """,
-        rows,
-    )
-
-    return len(rows)
-
-
 def ingest_paths(
     paths: Iterable[Path],
     embedding_dir: Path | None,
@@ -317,7 +250,7 @@ def ingest_paths(
                 if embedding_dir:
                     embedding_path = embedding_dir / f"{sha_id}.npz"
                     if embedding_path.exists():
-                        counts["embeddings"] += _insert_embeddings(
+                        counts["embeddings"] += insert_vggish_embeddings(
                             cur,
                             sha_id,
                             embedding_path,
@@ -336,14 +269,6 @@ def collect_mp3_files(input_path: Path) -> list[Path]:
         return [input_path]
     return sorted(
         path for path in input_path.rglob("*.mp3") if path.is_file()
-    )
-
-
-def _default_preprocess_version() -> str:
-    return (
-        f"sr={vggish_config.TARGET_SAMPLE_RATE}"
-        f";frame={vggish_config.VGGISH_FRAME_SEC}"
-        f";hop={vggish_config.VGGISH_HOP_SEC}"
     )
 
 
@@ -374,7 +299,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preprocess-version",
-        default=_default_preprocess_version(),
+        default=default_preprocess_version(),
         help="Embedding preprocessing version string.",
     )
     parser.add_argument(

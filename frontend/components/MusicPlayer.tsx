@@ -141,7 +141,7 @@ export default function MusicPlayer({
           <button
             onClick={handleLike}
             className={`transition-colors ${
-              isLiked ? 'text-green-500' : 'text-gray-400 hover:text-green-500'
+              isLiked ? 'text-pink-500' : 'text-gray-400 hover:text-pink-500'
             }`}
             title={isLiked ? 'Unlike' : 'Like'}
           >
@@ -174,7 +174,7 @@ export default function MusicPlayer({
           <button
             onClick={onShuffleToggle}
             className={`transition-colors ${
-              shuffleEnabled ? 'text-green-500' : 'text-gray-400 hover:text-white'
+              shuffleEnabled ? 'text-pink-500' : 'text-gray-400 hover:text-white'
             }`}
             title={shuffleEnabled ? 'Shuffle on' : 'Shuffle off'}
           >
@@ -217,7 +217,7 @@ export default function MusicPlayer({
           <button
             onClick={onRepeatToggle}
             className={`relative transition-colors ${
-              repeatMode !== 'off' ? 'text-green-500' : 'text-gray-400 hover:text-white'
+              repeatMode !== 'off' ? 'text-pink-500' : 'text-gray-400 hover:text-white'
             }`}
             title={
               repeatMode === 'off'
@@ -251,7 +251,7 @@ export default function MusicPlayer({
             className="flex-1 h-1 bg-gray-700 rounded-full cursor-pointer group"
           >
             <div
-              className="h-full bg-white rounded-full relative group-hover:bg-green-500 transition-colors"
+              className="h-full bg-white rounded-full relative group-hover:bg-pink-500 transition-colors"
               style={{ width: `${progress}%` }}
             >
               <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />

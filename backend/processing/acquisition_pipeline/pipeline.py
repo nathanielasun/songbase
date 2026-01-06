@@ -72,6 +72,7 @@ def download_pending(
                     result.item.queue_id,
                     config.DOWNLOAD_STATUS_FAILED,
                     error=result.error,
+                    increment_attempts=True,
                 )
                 failed += 1
 

@@ -82,7 +82,10 @@ songbase/
 │   └── processing/    # Audio processing modules
 │       ├── mp3_to_pcm.py
 │       ├── orchestrator.py
+│       ├── pipeline_state.py
+│       ├── storage_utils.py
 │       └── audio_pipeline/
+├── backend/tests/      # Backend test suite
 ├── songs/             # Music library (MP3 files)
 ├── .song_cache/       # SHA-256 hashed song database
 └── STATUS/            # Project planning and status docs (see STATUS/processing-backend-plan.md)
@@ -98,6 +101,27 @@ The processing orchestrator ties acquisition, PCM conversion, hashing, embedding
 
 ```bash
 SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
+```
+
+Add `--images` to sync cover art and artist profiles after verification (requires `SONGBASE_IMAGE_DATABASE_URL`).
+
+## Image Metadata Database
+
+Cover art and artist profiles are stored in a separate Postgres database. Apply the image migrations and run the image pipeline with both database URLs set.
+
+```bash
+SONGBASE_IMAGE_DATABASE_URL=postgres://... python backend/db/migrate_images.py
+SONGBASE_DATABASE_URL=postgres://... SONGBASE_IMAGE_DATABASE_URL=postgres://... \
+  python backend/processing/metadata_pipeline/image_cli.py --limit-songs 100
+```
+
+## Testing
+
+Opt-in end-to-end smoke test (requires ffmpeg, VGGish assets, and a local MP3):
+
+```bash
+SONGBASE_INTEGRATION_TEST=1 SONGBASE_TEST_MP3=/path/to/file.mp3 \
+  SONGBASE_DATABASE_URL=postgres://... python -m unittest backend.tests.test_orchestrator_integration
 ```
 
 ## Building Desktop Application

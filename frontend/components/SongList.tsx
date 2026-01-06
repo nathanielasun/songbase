@@ -64,7 +64,7 @@ export default function SongList({
                 <div className="flex-1 min-w-0">
                   <p
                     className={`truncate ${
-                      isCurrentSong ? 'text-green-500' : 'text-white'
+                      isCurrentSong ? 'text-pink-500' : 'text-white'
                     }`}
                   >
                     {song.title}

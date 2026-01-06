@@ -1,12 +1,9 @@
 from __future__ import annotations
 
 import argparse
-import datetime as dt
 import hashlib
 import json
-import os
 import sys
-import threading
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,20 +12,20 @@ from typing import Iterable
 if __package__ is None:  # Allow running as a script.
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-import numpy as np
-from pgvector import Vector
-
 from backend.db.connection import get_connection
+from backend.db.embeddings import insert_vggish_embeddings
 from backend.processing import dependencies, mp3_to_pcm
 from backend.processing.acquisition_pipeline import config as acquisition_config
 from backend.processing.acquisition_pipeline import db as acquisition_db
 from backend.processing.acquisition_pipeline import io as acquisition_io
 from backend.processing.acquisition_pipeline import pipeline as acquisition_pipeline
-from backend.processing.audio_pipeline import config as audio_config
 from backend.processing.audio_pipeline import io as audio_io
 from backend.processing.audio_pipeline.pipeline import embed_wav_file
 from backend.processing.hash_pipeline.pipeline import save_normalized_wav
+from backend.processing.metadata_pipeline.image_pipeline import sync_images_and_profiles
 from backend.processing.metadata_pipeline.pipeline import verify_unverified_songs
+from backend.processing.pipeline_state import StateWriter, utc_now
+from backend.processing.storage_utils import atomic_move, song_cache_path
 
 STATUS_PCM_READY = "pcm_raw_ready"
 STATUS_HASHED = "hashed"
@@ -107,24 +104,11 @@ class OrchestratorConfig:
     overwrite: bool
     dry_run: bool
     verify: bool
+    images: bool
+    image_limit_songs: int | None
+    image_limit_artists: int | None
+    image_rate_limit: float | None
     sources_file: Path | None
-
-
-class StateWriter:
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._lock = threading.Lock()
-
-    def append(self, payload: dict) -> None:
-        line = json.dumps(payload, sort_keys=True)
-        with self._lock:
-            self._path.parent.mkdir(parents=True, exist_ok=True)
-            with self._path.open("a", encoding="utf-8") as handle:
-                handle.write(line + "\n")
-
-
-def _utc_now() -> str:
-    return dt.datetime.utcnow().isoformat() + "Z"
 
 
 def _sha256_file(path: Path) -> str:
@@ -160,7 +144,7 @@ def _embedding_final_path(paths: PipelinePaths, sha_id: str) -> Path:
 
 
 def _song_cache_path(paths: PipelinePaths, sha_id: str) -> Path:
-    return paths.song_cache_dir / sha_id[:2] / f"{sha_id}.mp3"
+    return song_cache_path(paths.song_cache_dir, sha_id, extension=".mp3")
 
 
 def _load_sidecar_metadata(path: Path) -> dict:
@@ -292,71 +276,6 @@ def _insert_relations(cur, sha_id: str, metadata: dict) -> None:
         )
 
 
-def _load_embeddings(npz_path: Path) -> np.ndarray:
-    data = np.load(npz_path)
-    if "embedding" in data:
-        embeddings = data["embedding"]
-    elif "postprocessed" in data:
-        embeddings = data["postprocessed"]
-    else:
-        raise ValueError("Embedding file missing 'embedding' or 'postprocessed' arrays")
-
-    if embeddings.ndim == 1:
-        embeddings = embeddings.reshape(1, -1)
-    if embeddings.shape[1] != audio_config.VGGISH_EMBEDDING_SIZE:
-        raise ValueError("Embedding dimension mismatch")
-
-    return embeddings.astype(np.float32)
-
-
-def _insert_embeddings(cur, sha_id: str, npz_path: Path) -> int:
-    embeddings = _load_embeddings(npz_path)
-    hop = float(audio_config.VGGISH_HOP_SEC)
-    frame = float(audio_config.VGGISH_FRAME_SEC)
-    model_name = "vggish"
-    model_version = audio_config.VGGISH_CHECKPOINT_VERSION
-    preprocess_version = (
-        f"sr={audio_config.TARGET_SAMPLE_RATE}"
-        f";frame={audio_config.VGGISH_FRAME_SEC}"
-        f";hop={audio_config.VGGISH_HOP_SEC}"
-    )
-
-    rows = []
-    for idx, vector in enumerate(embeddings):
-        start = idx * hop
-        end = start + frame
-        rows.append(
-            (
-                sha_id,
-                model_name,
-                model_version,
-                preprocess_version,
-                Vector(vector),
-                start,
-                end,
-            )
-        )
-
-    cur.executemany(
-        """
-        INSERT INTO embeddings.vggish_embeddings (
-            sha_id,
-            model_name,
-            model_version,
-            preprocess_version,
-            vector,
-            segment_start_sec,
-            segment_end_sec
-        )
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT DO NOTHING
-        """,
-        rows,
-    )
-
-    return len(rows)
-
-
 def _fetch_processing_items(
     statuses: Iterable[str],
     limit: int | None,
@@ -381,7 +300,12 @@ def _fetch_processing_items(
     for row in rows:
         download_path = Path(row[3])
         if not download_path.exists():
-            acquisition_db.mark_status(row[0], STATUS_FAILED, error="missing download")
+            acquisition_db.mark_status(
+                row[0],
+                STATUS_FAILED,
+                error="missing download",
+                increment_attempts=True,
+            )
             continue
         items.append(
             ProcessingItem(
@@ -444,16 +368,10 @@ def _embed_pcm(
     return EmbeddingResult(queue_id=queue_id, embedding_path=embedding_path)
 
 
-def _move_mp3(mp3_path: Path, target_path: Path) -> None:
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(mp3_path, target_path)
-
-
 def _rename_embedding(source: Path, target: Path) -> Path:
     if source == target:
         return target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    os.replace(source, target)
+    atomic_move(source, target)
     return target
 
 
@@ -469,7 +387,7 @@ def _update_database(
             _insert_relations(cur, sha_id, metadata)
             _insert_song_file(cur, sha_id, mp3_path, ingestion_source="orchestrator")
             if embedding_path and embedding_path.exists():
-                _insert_embeddings(cur, sha_id, embedding_path)
+                insert_vggish_embeddings(cur, sha_id, embedding_path)
         conn.commit()
 
 
@@ -479,13 +397,18 @@ def _handle_failure(
     stage: str,
     error: Exception,
 ) -> None:
-    acquisition_db.mark_status(item.queue_id, STATUS_FAILED, error=str(error))
+    acquisition_db.mark_status(
+        item.queue_id,
+        STATUS_FAILED,
+        error=str(error),
+        increment_attempts=True,
+    )
     state.append(
         {
             "download_id": item.queue_id,
             "stage": stage,
             "error": str(error),
-            "ts": _utc_now(),
+            "ts": utc_now(),
         }
     )
 
@@ -536,7 +459,7 @@ def _process_items(
                     "download_id": item.queue_id,
                     "stage": STATUS_PCM_READY,
                     "path": str(result.raw_pcm_path),
-                    "ts": _utc_now(),
+                    "ts": utc_now(),
                 }
             )
             acquisition_db.mark_status(item.queue_id, STATUS_PCM_READY)
@@ -577,10 +500,14 @@ def _process_items(
                     "download_id": item.queue_id,
                     "stage": STATUS_HASHED,
                     "sha_id": result.sha_id,
-                    "ts": _utc_now(),
+                    "ts": utc_now(),
                 }
             )
-            acquisition_db.mark_status(item.queue_id, STATUS_HASHED)
+            acquisition_db.mark_status(
+                item.queue_id,
+                STATUS_HASHED,
+                sha_id=result.sha_id,
+            )
 
         embed_results: dict[int, EmbeddingResult] = {}
         for future in as_completed(embed_futures):
@@ -596,7 +523,7 @@ def _process_items(
                     "download_id": item.queue_id,
                     "stage": STATUS_EMBEDDED,
                     "path": str(result.embedding_path),
-                    "ts": _utc_now(),
+                    "ts": utc_now(),
                 }
             )
             acquisition_db.mark_status(item.queue_id, STATUS_EMBEDDED)
@@ -610,13 +537,18 @@ def _process_items(
             sha_id = hash_result.sha_id
             target_mp3 = _song_cache_path(paths, sha_id)
             if target_mp3.exists():
-                acquisition_db.mark_status(item.queue_id, STATUS_DUPLICATE)
+                acquisition_db.mark_status(
+                    item.queue_id,
+                    STATUS_DUPLICATE,
+                    sha_id=sha_id,
+                    stored_path=str(target_mp3),
+                )
                 state.append(
                     {
                         "download_id": item.queue_id,
                         "stage": STATUS_DUPLICATE,
                         "sha_id": sha_id,
-                        "ts": _utc_now(),
+                        "ts": utc_now(),
                     }
                 )
                 continue
@@ -625,7 +557,7 @@ def _process_items(
                 continue
 
             try:
-                _move_mp3(item.download_path, target_mp3)
+                atomic_move(item.download_path, target_mp3)
                 embedding_final = _rename_embedding(
                     embed_result.embedding_path,
                     _embedding_final_path(paths, sha_id),
@@ -640,14 +572,19 @@ def _process_items(
                 _handle_failure(item, state, "finalize_failed", exc)
                 continue
 
-            acquisition_db.mark_status(item.queue_id, STATUS_STORED)
+            acquisition_db.mark_status(
+                item.queue_id,
+                STATUS_STORED,
+                sha_id=sha_id,
+                stored_path=str(target_mp3),
+            )
             state.append(
                 {
                     "download_id": item.queue_id,
                     "stage": STATUS_STORED,
                     "sha_id": sha_id,
                     "path": str(target_mp3),
-                    "ts": _utc_now(),
+                    "ts": utc_now(),
                 }
             )
 
@@ -722,6 +659,29 @@ def _parse_args() -> OrchestratorConfig:
         action="store_true",
         help="Run MusicBrainz verification after storage.",
     )
+    parser.add_argument(
+        "--images",
+        action="store_true",
+        help="Sync cover art and artist profiles after verification.",
+    )
+    parser.add_argument(
+        "--image-limit-songs",
+        type=int,
+        default=None,
+        help="Maximum number of verified songs to inspect for images.",
+    )
+    parser.add_argument(
+        "--image-limit-artists",
+        type=int,
+        default=None,
+        help="Maximum number of artists to inspect for profiles.",
+    )
+    parser.add_argument(
+        "--image-rate-limit",
+        type=float,
+        default=None,
+        help="Seconds to wait between external image requests.",
+    )
 
     args = parser.parse_args()
     sources_file = Path(args.sources_file).expanduser().resolve() if args.sources_file else None
@@ -738,6 +698,10 @@ def _parse_args() -> OrchestratorConfig:
         overwrite=args.overwrite,
         dry_run=args.dry_run,
         verify=args.verify,
+        images=args.images,
+        image_limit_songs=args.image_limit_songs,
+        image_limit_artists=args.image_limit_artists,
+        image_rate_limit=args.image_rate_limit,
         sources_file=sources_file,
     )
 
@@ -748,7 +712,7 @@ def run_orchestrator(config: OrchestratorConfig) -> None:
     _ensure_directories(paths)
 
     state = StateWriter(paths.pipeline_state_path)
-    state.append({"stage": "start", "ts": _utc_now()})
+    state.append({"stage": "start", "ts": utc_now()})
 
     if config.seed_sources:
         inserted = acquisition_pipeline.ensure_sources(config.sources_file)
@@ -782,7 +746,24 @@ def run_orchestrator(config: OrchestratorConfig) -> None:
             f"{result.verified} verified, {result.skipped} skipped."
         )
 
-    state.append({"stage": "finished", "ts": _utc_now()})
+    if config.images:
+        result = sync_images_and_profiles(
+            limit_songs=config.image_limit_songs,
+            limit_artists=config.image_limit_artists,
+            rate_limit_seconds=config.image_rate_limit,
+            dry_run=config.dry_run,
+        )
+        print(
+            "Image sync complete. "
+            f"Songs processed: {result.songs_processed}, "
+            f"Song images: {result.song_images}, "
+            f"Album images: {result.album_images}, "
+            f"Artist profiles: {result.artist_profiles}, "
+            f"Artist images: {result.artist_images}, "
+            f"Failed: {result.failed}"
+        )
+
+    state.append({"stage": "finished", "ts": utc_now()})
 
 
 def main() -> int:
