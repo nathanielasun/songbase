@@ -20,7 +20,7 @@ _VGGISH_MODEL: Optional[VggishModel] = None
 def get_vggish_model() -> VggishModel:
     global _VGGISH_MODEL
     if _VGGISH_MODEL is None:
-        dependencies.ensure_dependencies([\"vggish_source\", \"vggish_assets\"])
+        dependencies.ensure_dependencies(["vggish_source", "vggish_assets"])
         _VGGISH_MODEL = load_vggish_model()
     return _VGGISH_MODEL
 

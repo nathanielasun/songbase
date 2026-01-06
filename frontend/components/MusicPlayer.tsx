@@ -56,17 +56,23 @@ export default function MusicPlayer({
   const [volume, setVolume] = useState(70);
   const [isMuted, setIsMuted] = useState(false);
   const progressRef = useRef<HTMLDivElement>(null);
+  const onSongEndRef = useRef(onSongEnd);
 
   const duration = currentSong?.duration || 0;
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+  // Keep the ref updated with the latest callback
+  useEffect(() => {
+    onSongEndRef.current = onSongEnd;
+  }, [onSongEnd]);
 
   useEffect(() => {
     if (isPlaying && currentSong) {
       const interval = setInterval(() => {
         setCurrentTime((prev) => {
           if (prev >= duration - 1) {
-            if (onSongEnd) {
-              onSongEnd();
+            if (onSongEndRef.current) {
+              onSongEndRef.current();
             }
             return 0;
           }
@@ -74,8 +80,10 @@ export default function MusicPlayer({
         });
       }, 1000);
       return () => clearInterval(interval);
+    } else {
+      setCurrentTime(0);
     }
-  }, [isPlaying, currentSong, duration, onSongEnd]);
+  }, [isPlaying, currentSong, duration]);
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!progressRef.current || !currentSong) return;
@@ -278,7 +286,7 @@ export default function MusicPlayer({
           max="100"
           value={isMuted ? 0 : volume}
           onChange={handleVolumeChange}
-          className="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
+          className="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer volume-slider"
         />
       </div>
     </div>

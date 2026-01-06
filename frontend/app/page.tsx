@@ -69,17 +69,28 @@ export default function Home() {
 
   const handleSongEnd = useCallback(() => {
     if (repeatMode === 'once') {
-      setIsPlaying(true);
+      // Song will restart automatically since currentTime resets to 0
+      // Just keep playing
+      return;
     } else if (repeatMode === 'all') {
-      handleNext();
+      // Move to next song
+      if (queue.length === 0) return;
+      const nextIndex = (currentIndex + 1) % queue.length;
+      setCurrentIndex(nextIndex);
+      setCurrentSong(queue[nextIndex]);
+      setIsPlaying(true);
     } else {
+      // Repeat off - play next or stop at end
       if (currentIndex < queue.length - 1) {
-        handleNext();
+        const nextIndex = currentIndex + 1;
+        setCurrentIndex(nextIndex);
+        setCurrentSong(queue[nextIndex]);
+        setIsPlaying(true);
       } else {
         setIsPlaying(false);
       }
     }
-  }, [repeatMode, currentIndex, queue.length, handleNext]);
+  }, [repeatMode, currentIndex, queue]);
 
   const handleRepeatToggle = () => {
     const modes: RepeatMode[] = ['off', 'all', 'once'];
@@ -172,6 +183,10 @@ export default function Home() {
     console.log('Add to playlist:', song);
   };
 
+  const handleDownloadSong = (song: Song) => {
+    console.log('Download song:', song.title, '(stub - will interface with backend)');
+  };
+
   return (
     <div className="h-screen flex flex-col bg-black text-white">
       {/* Main Content Area */}
@@ -217,6 +232,7 @@ export default function Home() {
                 isPlaying={isPlaying}
                 onSongClick={handleSongClick}
                 onAddToPlaylist={handleAddToPlaylist}
+                onDownload={handleDownloadSong}
               />
             </div>
           ) : (

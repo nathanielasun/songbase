@@ -27,6 +27,10 @@ class DependencyFile:
     sha256: str | None = None
     executable: bool = False
     archive_member: str | None = None
+    archive_sha256: str | None = None
+    extract_all: bool = False
+    archive_root: str | None = None
+    create_marker: bool = False
 
 
 @dataclass(frozen=True)
@@ -37,6 +41,17 @@ class Dependency:
 
 
 PROCESSING_DIR = Path(__file__).resolve().parent
+
+
+def _postgres_bundle_dir() -> Path:
+    override = os.environ.get("POSTGRES_BUNDLE_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    return PROCESSING_DIR / "bin" / "postgres"
+
+
+POSTGRES_BUNDLE_DIR = _postgres_bundle_dir()
+POSTGRES_BUNDLE_MARKER = POSTGRES_BUNDLE_DIR / ".bundle_ready"
 
 VGGISH_SOURCE_BASE_URL = (
     "https://raw.githubusercontent.com/tensorflow/models/master/"
@@ -61,6 +76,53 @@ def _default_ffmpeg_url() -> str | None:
                 "ffmpeg-release-arm64-static.tar.xz"
             )
     return None
+
+
+def _default_postgres_bundle_url() -> str | None:
+    override = os.environ.get("POSTGRES_BUNDLE_URL")
+    if override:
+        return override
+
+    system = sys.platform
+    machine = platform.machine().lower()
+    if system == "darwin":
+        if machine in {"arm64", "aarch64"}:
+            return os.environ.get("POSTGRES_BUNDLE_URL_DARWIN_ARM64")
+        if machine in {"x86_64", "amd64"}:
+            return os.environ.get("POSTGRES_BUNDLE_URL_DARWIN_X86_64")
+    if system.startswith("linux"):
+        if machine in {"x86_64", "amd64"}:
+            return os.environ.get("POSTGRES_BUNDLE_URL_LINUX_AMD64")
+        if machine in {"aarch64", "arm64"}:
+            return os.environ.get("POSTGRES_BUNDLE_URL_LINUX_ARM64")
+    return None
+
+
+def _default_postgres_bundle_sha256() -> str | None:
+    override = os.environ.get("POSTGRES_BUNDLE_SHA256")
+    if override:
+        return _normalize_sha256(override)
+
+    system = sys.platform
+    machine = platform.machine().lower()
+    if system == "darwin":
+        if machine in {"arm64", "aarch64"}:
+            return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_DARWIN_ARM64", ""))
+        if machine in {"x86_64", "amd64"}:
+            return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_DARWIN_X86_64", ""))
+    if system.startswith("linux"):
+        if machine in {"x86_64", "amd64"}:
+            return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_LINUX_AMD64", ""))
+        if machine in {"aarch64", "arm64"}:
+            return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_LINUX_ARM64", ""))
+    return None
+
+
+def _postgres_bundle_archive_root() -> str | None:
+    value = os.environ.get("POSTGRES_BUNDLE_ARCHIVE_ROOT")
+    if not value:
+        return None
+    return value.strip().strip("/")
 
 def _normalize_sha256(value: str) -> str | None:
     if value.startswith("sha256:"):
@@ -156,6 +218,22 @@ DEPENDENCIES: dict[str, Dependency] = {
             ),
         ),
     ),
+    "postgres_bundle": Dependency(
+        name="postgres_bundle",
+        description="Local Postgres + pgvector bundle for plug-and-play usage.",
+        files=(
+            DependencyFile(
+                name="postgres_bundle",
+                path=POSTGRES_BUNDLE_MARKER,
+                url=_default_postgres_bundle_url(),
+                url_env="POSTGRES_BUNDLE_URL",
+                archive_sha256=_default_postgres_bundle_sha256(),
+                extract_all=True,
+                archive_root=_postgres_bundle_archive_root(),
+                create_marker=True,
+            ),
+        ),
+    ),
 }
 
 _FIRST_RUN_READY = False
@@ -180,6 +258,10 @@ def _download_file(
     url: str,
     dest_path: Path,
     archive_member: str | None = None,
+    archive_sha256: str | None = None,
+    extract_all: bool = False,
+    archive_root: str | None = None,
+    create_marker: bool = False,
 ) -> None:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = dest_path.with_suffix(dest_path.suffix + ".download")
@@ -193,8 +275,24 @@ def _download_file(
                 break
             handle.write(chunk)
     try:
+        if archive_sha256:
+            actual = _sha256_file(temp_path)
+            if actual != archive_sha256:
+                raise RuntimeError(
+                    "Checksum mismatch for archive download.\n"
+                    f"Expected: {archive_sha256}\n"
+                    f"Actual:   {actual}"
+                )
+
         if zipfile.is_zipfile(temp_path) or tarfile.is_tarfile(temp_path):
-            _extract_archive(temp_path, dest_path, archive_member)
+            if extract_all:
+                target_dir = dest_path if dest_path.is_dir() else dest_path.parent
+                _extract_archive_all(temp_path, target_dir, archive_root)
+                _mark_executable_dir(target_dir / "bin")
+                if create_marker:
+                    dest_path.write_text("ok", encoding="utf-8")
+            else:
+                _extract_archive(temp_path, dest_path, archive_member)
         else:
             temp_path.replace(dest_path)
     finally:
@@ -239,6 +337,70 @@ def _extract_archive(
         return
 
     raise RuntimeError(f"Unsupported archive type: {archive_path.name}")
+
+
+def _extract_archive_all(
+    archive_path: Path,
+    dest_dir: Path,
+    archive_root: str | None,
+) -> None:
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    root_prefix = f"{archive_root}/" if archive_root else None
+
+    def _relpath(name: str) -> str | None:
+        if root_prefix:
+            if not name.startswith(root_prefix):
+                return None
+            relative = name[len(root_prefix) :]
+        else:
+            relative = name
+        if not relative or relative.endswith("/"):
+            return None
+        if ".." in Path(relative).parts:
+            raise RuntimeError("Unsafe path in archive.")
+        return relative
+
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as archive:
+            for name in archive.namelist():
+                relative = _relpath(name)
+                if not relative:
+                    continue
+                target = dest_dir / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(name) as src, target.open("wb") as dst:
+                    _copy_stream(src, dst)
+        return
+
+    if tarfile.is_tarfile(archive_path):
+        with tarfile.open(archive_path) as archive:
+            members = [m for m in archive.getmembers() if m.isfile()]
+            for member in members:
+                relative = _relpath(member.name)
+                if not relative:
+                    continue
+                target = dest_dir / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                extracted = archive.extractfile(member)
+                if extracted is None:
+                    continue
+                with extracted, target.open("wb") as dst:
+                    _copy_stream(extracted, dst)
+        return
+
+    raise RuntimeError(f"Unsupported archive type: {archive_path.name}")
+
+
+def _mark_executable_dir(path: Path) -> None:
+    if not path.exists() or not path.is_dir():
+        return
+    for candidate in path.iterdir():
+        if not candidate.is_file():
+            continue
+        try:
+            os.chmod(candidate, 0o755)
+        except OSError:
+            continue
 
 
 def _select_archive_member(names: list[str], target_name: str) -> str | None:
@@ -314,7 +476,15 @@ def _ensure_file(
             "or install it manually."
         )
 
-    _download_file(url, path, dep_file.archive_member)
+    _download_file(
+        url,
+        path,
+        archive_member=dep_file.archive_member,
+        archive_sha256=dep_file.archive_sha256,
+        extract_all=dep_file.extract_all,
+        archive_root=dep_file.archive_root,
+        create_marker=dep_file.create_marker,
+    )
     _verify_file(dep, dep_file)
 
     if dep_file.executable:
@@ -323,6 +493,8 @@ def _ensure_file(
 
 def _verify_file(dep: Dependency, dep_file: DependencyFile) -> None:
     if not dep_file.sha256:
+        return
+    if dep_file.extract_all:
         return
     actual = _sha256_file(dep_file.path)
     if actual != dep_file.sha256:
@@ -379,6 +551,22 @@ def main() -> int:
     )
     print("Dependencies ensured.")
     return 0
+
+
+def postgres_bundle_dir() -> Path:
+    return POSTGRES_BUNDLE_DIR
+
+
+def postgres_bin_dir() -> Path:
+    return POSTGRES_BUNDLE_DIR / "bin"
+
+
+def postgres_bundle_marker() -> Path:
+    return POSTGRES_BUNDLE_MARKER
+
+
+def postgres_bundle_url() -> str | None:
+    return _default_postgres_bundle_url()
 
 
 if __name__ == "__main__":

@@ -9,7 +9,8 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-BASE_DIR = REPO_ROOT / ".metadata" / "postgres"
+METADATA_ROOT = Path(os.environ.get("SONGBASE_METADATA_DIR", REPO_ROOT / ".metadata"))
+BASE_DIR = METADATA_ROOT / "postgres"
 DATA_DIR = BASE_DIR / "data"
 RUN_DIR = BASE_DIR / "run"
 LOG_PATH = BASE_DIR / "postgres.log"
@@ -17,6 +18,14 @@ LOG_PATH = BASE_DIR / "postgres.log"
 DEFAULT_PORT = 5433
 DEFAULT_METADATA_DB = "songbase_metadata"
 DEFAULT_IMAGE_DB = "songbase_images"
+
+if __package__ is None:  # Allow running as a script.
+    sys.path.insert(0, str(REPO_ROOT / "backend" / "processing"))
+
+try:
+    from backend.processing import dependencies as processing_deps
+except ImportError:
+    import dependencies as processing_deps
 
 
 def _local_user() -> str:
@@ -45,13 +54,40 @@ def _image_url() -> str:
     return f"postgresql://{_local_user()}@/{_image_db()}?host={host}&port={_port()}"
 
 
+def metadata_url() -> str:
+    return _metadata_url()
+
+
+def image_url() -> str:
+    return _image_url()
+
+
 def _require_tool(name: str) -> str:
+    bundle_dir = _postgres_bin_dir()
+    if bundle_dir:
+        candidate = bundle_dir / name
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+
     resolved = shutil.which(name)
     if not resolved:
         raise RuntimeError(
             f"Missing '{name}'. Install Postgres and ensure '{name}' is on PATH."
         )
     return resolved
+
+
+def _postgres_bin_dir() -> Path | None:
+    override = os.environ.get("POSTGRES_BIN_DIR")
+    if override:
+        candidate = Path(override).expanduser()
+        if candidate.is_dir():
+            return candidate
+
+    candidate = processing_deps.postgres_bin_dir()
+    if candidate.exists():
+        return candidate
+    return None
 
 
 def _run(cmd: list[str], env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -165,6 +201,8 @@ def _run_migrations() -> None:
 
 
 def ensure_cluster() -> None:
+    if processing_deps.postgres_bundle_marker().exists() or processing_deps.postgres_bundle_url():
+        processing_deps.ensure_dependencies(["postgres_bundle"])
     initdb = _require_tool("initdb")
     pg_ctl = _require_tool("pg_ctl")
     createdb = _require_tool("createdb")

@@ -115,6 +115,8 @@ python backend/db/local_postgres.py ensure
 eval "$(python backend/db/local_postgres.py env)"
 ```
 
+To use the bundled Postgres+pgvector binaries, set `POSTGRES_BUNDLE_URL` (or OS-specific variants like `POSTGRES_BUNDLE_URL_DARWIN_ARM64`) and optional `POSTGRES_BUNDLE_SHA256` before running the bootstrap. If your archive wraps files under a top-level folder, set `POSTGRES_BUNDLE_ARCHIVE_ROOT` to strip it. You can override the bundle destination with `POSTGRES_BUNDLE_DIR` and the metadata root with `SONGBASE_METADATA_DIR`.
+
 ## Image Metadata Database
 
 Cover art and artist profiles are stored in a separate Postgres database. Apply the image migrations and run the image pipeline with both database URLs set.

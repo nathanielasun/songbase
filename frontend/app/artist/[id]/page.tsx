@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeftIcon, PlayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { mockArtists, mockAlbums, mockSongs, formatDate } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
@@ -45,6 +45,14 @@ export default function ArtistPage() {
       setCurrentSong(song);
       setIsPlaying(true);
     }
+  };
+
+  const handleDownloadAlbum = (albumId: string, albumTitle: string) => {
+    console.log('Download album:', albumTitle, '(stub - will interface with backend)');
+  };
+
+  const handleDownloadSong = (song: Song) => {
+    console.log('Download song:', song.title, '(stub - will interface with backend)');
   };
 
   return (
@@ -99,7 +107,7 @@ export default function ArtistPage() {
 
       {/* Actions */}
       <div className="px-8 py-4 flex items-center gap-4">
-        <button className="bg-pink-500 hover:bg-pink-600 text-white rounded-full p-4 transition-colors shadow-lg">
+        <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
           <PlayIcon className="w-6 h-6" />
         </button>
       </div>
@@ -154,16 +162,29 @@ export default function ArtistPage() {
                 href={`/album/${album.id}`}
                 className="group cursor-pointer"
               >
-                <div className="bg-gray-800 rounded-lg p-4 hover:bg-gray-700 transition-all">
-                  {album.coverArt && (
-                    <Image
-                      src={album.coverArt}
-                      alt={album.title}
-                      width={200}
-                      height={200}
-                      className="rounded mb-4 w-full"
-                    />
-                  )}
+                <div className="bg-gray-800 rounded-lg p-4 hover:bg-gray-700 transition-all relative">
+                  <div className="relative">
+                    {album.coverArt && (
+                      <Image
+                        src={album.coverArt}
+                        alt={album.title}
+                        width={200}
+                        height={200}
+                        className="rounded mb-4 w-full"
+                      />
+                    )}
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        handleDownloadAlbum(album.id, album.title);
+                      }}
+                      className="absolute top-2 right-2 p-2 bg-black/70 rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-black"
+                      title="Download album"
+                    >
+                      <ArrowDownTrayIcon className="w-5 h-5 text-gray-400 hover:text-pink-500" />
+                    </button>
+                  </div>
                   <h3 className="font-semibold text-white truncate mb-1">
                     {album.title}
                   </h3>
@@ -186,6 +207,7 @@ export default function ArtistPage() {
             currentSong={currentSong}
             isPlaying={isPlaying}
             onSongClick={handleSongClick}
+            onDownload={handleDownloadSong}
           />
         ) : (
           <div className="text-center py-16">

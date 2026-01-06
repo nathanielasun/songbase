@@ -75,6 +75,54 @@ input[type='range'].slider:hover::-moz-range-thumb {
   opacity: 1;
 }
 
+/* Volume Slider - Hot Pink */
+input[type='range'].volume-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+input[type='range'].volume-slider::-webkit-slider-track {
+  background: #4b5563;
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type='range'].volume-slider::-moz-range-track {
+  background: #4b5563;
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type='range'].volume-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: #ec4899;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  margin-top: -4px;
+  transition: background 0.2s;
+}
+
+input[type='range'].volume-slider:hover::-webkit-slider-thumb {
+  background: #db2777;
+}
+
+input[type='range'].volume-slider::-moz-range-thumb {
+  background: #ec4899;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  border: none;
+  transition: background 0.2s;
+}
+
+input[type='range'].volume-slider:hover::-moz-range-thumb {
+  background: #db2777;
+}
+
 /* Scrollbar Styling */
 ::-webkit-scrollbar {
   width: 12px;

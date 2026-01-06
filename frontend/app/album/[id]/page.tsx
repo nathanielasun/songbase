@@ -4,7 +4,7 @@ import { useParams } from 'next/navigation';
 import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
-import { ArrowLeftIcon, PlayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { mockAlbums, mockSongs, formatDate, getTotalDuration, formatDuration } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
@@ -43,6 +43,14 @@ export default function AlbumPage() {
       setCurrentSong(song);
       setIsPlaying(true);
     }
+  };
+
+  const handleDownloadAlbum = () => {
+    console.log('Download album:', album.title, '(stub - will interface with backend)');
+  };
+
+  const handleDownloadSong = (song: Song) => {
+    console.log('Download song:', song.title, '(stub - will interface with backend)');
   };
 
   return (
@@ -109,8 +117,15 @@ export default function AlbumPage() {
 
       {/* Actions */}
       <div className="px-8 py-6 flex items-center gap-4">
-        <button className="bg-pink-500 hover:bg-pink-600 text-white rounded-full p-4 transition-colors shadow-lg">
+        <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
           <PlayIcon className="w-6 h-6" />
+        </button>
+        <button
+          onClick={handleDownloadAlbum}
+          className="text-gray-400 hover:text-pink-500 transition-colors"
+          title="Download album"
+        >
+          <ArrowDownTrayIcon className="w-8 h-8" />
         </button>
       </div>
 
@@ -122,6 +137,7 @@ export default function AlbumPage() {
             currentSong={currentSong}
             isPlaying={isPlaying}
             onSongClick={handleSongClick}
+            onDownload={handleDownloadSong}
           />
         ) : (
           <div className="text-center py-16">

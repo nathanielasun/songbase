@@ -7,6 +7,37 @@ let mainWindow;
 let backendProcess;
 const BACKEND_PORT = 8000;
 
+function _candidateExists(candidate) {
+  if (!candidate) {
+    return false;
+  }
+  const binary = process.platform === 'win32' ? 'pg_ctl.exe' : 'pg_ctl';
+  return fs.existsSync(path.join(candidate, 'bin', binary));
+}
+
+function buildBackendEnv() {
+  const env = { ...process.env };
+  const userData = app.getPath('userData');
+  const metadataRoot = path.join(userData, '.metadata');
+  env.SONGBASE_METADATA_DIR = env.SONGBASE_METADATA_DIR || metadataRoot;
+
+  const candidates = [
+    path.join(process.resourcesPath, 'postgres'),
+    path.join(process.resourcesPath, 'backend', 'postgres'),
+    path.join(process.resourcesPath, 'postgres_bundle'),
+  ];
+
+  const bundled = candidates.find(_candidateExists);
+  if (bundled) {
+    env.POSTGRES_BIN_DIR = env.POSTGRES_BIN_DIR || path.join(bundled, 'bin');
+  } else {
+    env.POSTGRES_BUNDLE_DIR =
+      env.POSTGRES_BUNDLE_DIR || path.join(metadataRoot, 'postgres_bundle');
+  }
+
+  return env;
+}
+
 function getBackendBinaryPath() {
   const platform = process.platform;
   const isDev = !app.isPackaged;
@@ -45,7 +76,7 @@ function startBackend() {
 
     backendProcess = spawn(binaryPath, ['--port', BACKEND_PORT.toString()], {
       stdio: 'inherit',
-      env: { ...process.env }
+      env: buildBackendEnv()
     });
 
     backendProcess.on('error', (error) => {

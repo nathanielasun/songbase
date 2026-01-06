@@ -189,6 +189,8 @@ try {
   python backend/db/local_postgres.py ensure
   eval "$(python backend/db/local_postgres.py env)"
   ```
+- **Bundle Support**: If `POSTGRES_BUNDLE_URL` (or OS-specific URL env vars) is set, it will auto-download a Postgres+pgvector bundle into `backend/processing/bin/postgres` and use it. Use `POSTGRES_BUNDLE_ARCHIVE_ROOT` if the archive has a top-level folder to strip.
+- **Overrides**: `POSTGRES_BUNDLE_DIR` sets the bundle destination; `SONGBASE_METADATA_DIR` sets the `.metadata` root.
 
 ### backend/db/ingest.py
 - **Purpose**: Ingest MP3 metadata and SHA IDs, optionally insert VGGish embeddings
