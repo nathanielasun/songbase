@@ -87,6 +87,7 @@ songbase/
 │       └── audio_pipeline/
 ├── backend/tests/      # Backend test suite
 ├── songs/             # Music library (MP3 files)
+├── .metadata/         # Local Postgres data (ignored)
 ├── .song_cache/       # SHA-256 hashed song database
 └── STATUS/            # Project planning and status docs (see STATUS/processing-backend-plan.md)
 ```
@@ -104,6 +105,15 @@ SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py -
 ```
 
 Add `--images` to sync cover art and artist profiles after verification (requires `SONGBASE_IMAGE_DATABASE_URL`).
+
+## Local Postgres Databases
+
+Songbase can bootstrap two local Postgres databases under `.metadata/` (metadata + images). This requires a local Postgres install (`initdb`, `pg_ctl`, `psql`, `createdb`) and the pgvector extension. If the environment variables are not set, `dev.sh` will auto-run this bootstrap.
+
+```bash
+python backend/db/local_postgres.py ensure
+eval "$(python backend/db/local_postgres.py env)"
+```
 
 ## Image Metadata Database
 

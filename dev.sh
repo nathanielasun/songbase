@@ -5,9 +5,15 @@
 
 echo "Starting Songbase development servers..."
 
+cd "$(dirname "$0")"
+
+if [ -z "$SONGBASE_DATABASE_URL" ] || [ -z "$SONGBASE_IMAGE_DATABASE_URL" ]; then
+  eval "$(python3 backend/db/local_postgres.py env)"
+fi
+python3 backend/db/local_postgres.py ensure
+
 # Start backend API server
 echo "Starting FastAPI backend on http://localhost:8000"
-cd "$(dirname "$0")"
 uvicorn backend.api.app:app --reload --port 8000 &
 BACKEND_PID=$!
 

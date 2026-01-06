@@ -4,6 +4,7 @@
 /songs
 /.song_cache/*
 !/.song_cache/.gitkeep
+/.metadata/
 
 #agent files
 AGENTS.md

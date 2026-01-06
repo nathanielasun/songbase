@@ -32,6 +32,7 @@ songbase/
 │   │   ├── image_migrations/
 │   │   │   └── 001_init.sql  - Image assets + profile schema
 │   │   ├── ingest.py         - MP3 metadata + embeddings ingestion CLI
+│   │   ├── local_postgres.py - Local Postgres bootstrap under .metadata
 │   │   ├── migrate.py        - Migration runner
 │   │   └── migrate_images.py - Image DB migration runner
 │   └── processing/    # Audio processing modules
@@ -85,6 +86,7 @@ songbase/
 │   └── build_unix.sh     - Builds standalone binary with bundled ffmpeg
 ├── songs/               # Music library (MP3 files)
 ├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
+├── .metadata/           # Local Postgres data (ignored)
 ├── .song_cache/         # SHA-256 hashed song database
 ├── STATUS/              # Project planning and status docs (see STATUS/processing-backend-plan.md)
 └── dev.sh               # Development server startup script
@@ -177,6 +179,15 @@ try {
 - **Usage**:
   ```bash
   SONGBASE_DATABASE_URL=postgres://... python backend/db/migrate.py
+  ```
+
+### backend/db/local_postgres.py
+- **Purpose**: Initialize and start a local Postgres cluster under `.metadata/` and create both databases.
+- **Requires**: `initdb`, `pg_ctl`, `psql`, `createdb` on PATH, plus the pgvector extension installed.
+- **Usage**:
+  ```bash
+  python backend/db/local_postgres.py ensure
+  eval "$(python backend/db/local_postgres.py env)"
   ```
 
 ### backend/db/ingest.py

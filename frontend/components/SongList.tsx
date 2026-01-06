@@ -1,6 +1,7 @@
 'use client';
 
 import Image from 'next/image';
+import Link from 'next/link';
 import { PlayIcon, PlusIcon } from '@heroicons/react/24/solid';
 import { Song } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
@@ -74,12 +75,32 @@ export default function SongList({
 
               {/* Album */}
               <div className="flex items-center text-gray-400 truncate">
-                {song.album || 'Unknown Album'}
+                {song.albumId ? (
+                  <Link
+                    href={`/album/${song.albumId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:text-white hover:underline truncate"
+                  >
+                    {song.album || 'Unknown Album'}
+                  </Link>
+                ) : (
+                  <span className="truncate">{song.album || 'Unknown Album'}</span>
+                )}
               </div>
 
               {/* Artist */}
               <div className="flex items-center text-gray-400 truncate">
-                {song.artist}
+                {song.artistId ? (
+                  <Link
+                    href={`/artist/${song.artistId}`}
+                    onClick={(e) => e.stopPropagation()}
+                    className="hover:text-white hover:underline truncate"
+                  >
+                    {song.artist}
+                  </Link>
+                ) : (
+                  <span className="truncate">{song.artist}</span>
+                )}
               </div>
 
               {/* Duration */}

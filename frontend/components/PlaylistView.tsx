@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { Playlist } from '@/lib/types';
 import { TrashIcon, PencilIcon } from '@heroicons/react/24/outline';
 
@@ -91,45 +92,53 @@ export default function PlaylistView({
       {/* Playlists Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
         {playlists.map((playlist) => (
-          <div
-            key={playlist.id}
-            className="bg-gray-800 rounded-lg p-6 hover:bg-gray-700 transition-colors group"
-          >
-            <div className="flex items-start justify-between mb-4">
-              {editingId === playlist.id ? (
-                <input
-                  type="text"
-                  value={editName}
-                  onChange={(e) => setEditName(e.target.value)}
-                  onBlur={() => handleRename(playlist.id)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleRename(playlist.id)}
-                  className="flex-1 px-2 py-1 bg-gray-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-pink-500"
-                  autoFocus
-                />
-              ) : (
-                <h3 className="text-xl font-semibold text-white truncate flex-1">
-                  {playlist.name}
-                </h3>
-              )}
-              <div className="flex gap-2 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                <button
-                  onClick={() => startEditing(playlist)}
-                  className="p-1 hover:bg-gray-600 rounded"
-                >
-                  <PencilIcon className="w-4 h-4 text-gray-400 hover:text-white" />
-                </button>
-                <button
-                  onClick={() => onDeletePlaylist(playlist.id)}
-                  className="p-1 hover:bg-gray-600 rounded"
-                >
-                  <TrashIcon className="w-4 h-4 text-gray-400 hover:text-red-500" />
-                </button>
+          <div key={playlist.id} className="relative">
+            <Link href={`/playlist/${playlist.id}`}>
+              <div className="bg-gray-800 rounded-lg p-6 hover:bg-gray-700 transition-colors group cursor-pointer">
+                <div className="flex items-start justify-between mb-4">
+                  {editingId === playlist.id ? (
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      onBlur={() => handleRename(playlist.id)}
+                      onKeyPress={(e) => e.key === 'Enter' && handleRename(playlist.id)}
+                      onClick={(e) => e.preventDefault()}
+                      className="flex-1 px-2 py-1 bg-gray-700 text-white rounded focus:outline-none focus:ring-2 focus:ring-pink-500"
+                      autoFocus
+                    />
+                  ) : (
+                    <h3 className="text-xl font-semibold text-white truncate flex-1">
+                      {playlist.name}
+                    </h3>
+                  )}
+                  <div className="flex gap-2 ml-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        startEditing(playlist);
+                      }}
+                      className="p-1 hover:bg-gray-600 rounded"
+                    >
+                      <PencilIcon className="w-4 h-4 text-gray-400 hover:text-white" />
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.preventDefault();
+                        onDeletePlaylist(playlist.id);
+                      }}
+                      className="p-1 hover:bg-gray-600 rounded"
+                    >
+                      <TrashIcon className="w-4 h-4 text-gray-400 hover:text-red-500" />
+                    </button>
+                  </div>
+                </div>
+                {playlist.description && (
+                  <p className="text-gray-400 text-sm mb-4">{playlist.description}</p>
+                )}
+                <p className="text-gray-400 text-sm">{playlist.songs.length} songs</p>
               </div>
-            </div>
-            {playlist.description && (
-              <p className="text-gray-400 text-sm mb-4">{playlist.description}</p>
-            )}
-            <p className="text-gray-400 text-sm">{playlist.songs.length} songs</p>
+            </Link>
           </div>
         ))}
       </div>
