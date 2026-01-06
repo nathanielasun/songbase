@@ -20,12 +20,21 @@ DEFAULT_METADATA_DB = "songbase_metadata"
 DEFAULT_IMAGE_DB = "songbase_images"
 
 if __package__ is None:  # Allow running as a script.
+    sys.path.insert(0, str(REPO_ROOT))
     sys.path.insert(0, str(REPO_ROOT / "backend" / "processing"))
 
 try:
     from backend.processing import dependencies as processing_deps
 except ImportError:
     import dependencies as processing_deps
+
+try:
+    from backend import bootstrap as python_bootstrap
+except ImportError:
+    try:
+        import bootstrap as python_bootstrap
+    except ImportError:
+        python_bootstrap = None
 
 
 def _local_user() -> str:
@@ -71,6 +80,14 @@ def _require_tool(name: str) -> str:
 
     resolved = shutil.which(name)
     if not resolved:
+        bundle_url = processing_deps.postgres_bundle_url()
+        if bundle_url:
+            processing_deps.ensure_dependencies(["postgres_bundle"])
+            bundle_dir = _postgres_bin_dir()
+            if bundle_dir:
+                candidate = bundle_dir / name
+                if candidate.is_file() and os.access(candidate, os.X_OK):
+                    return str(candidate)
         raise RuntimeError(
             f"Missing '{name}'. Install Postgres and ensure '{name}' is on PATH."
         )
@@ -212,6 +229,8 @@ def ensure_cluster() -> None:
     start_cluster(pg_ctl)
     _ensure_database(createdb, psql, _metadata_db())
     _ensure_database(createdb, psql, _image_db())
+    if python_bootstrap:
+        python_bootstrap.ensure_python_deps()
     _run_migrations()
 
 

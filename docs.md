@@ -20,12 +20,14 @@ songbase/
 │   │   │   └── library.py    - Metadata + embedding ingestion endpoints
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
+│   ├── bootstrap.py     - Python dependency bootstrapper
 │   ├── db/            # Postgres schema + ingestion tools
 │   │   ├── migrations/
 │   │   │   ├── 001_init.sql  - Metadata + embeddings schema with pgvector
 │   │   │   ├── 002_add_metadata_verification.sql - Adds verification metadata columns
 │   │   │   ├── 003_add_download_queue.sql - Adds download queue table
 │   │   │   └── 004_update_download_queue.sql - Adds queue tracking fields
+│   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
 │   │   ├── image_connection.py - Image DB connection helper
@@ -78,12 +80,14 @@ songbase/
 │       ├── dependencies.py    - Ensures local package dependencies are present
 │       ├── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
 │       ├── orchestrator.py    - End-to-end processing pipeline runner
+│       ├── run_pipeline.py    - Orchestrator entrypoint with auto deps
 │       ├── pipeline_state.py  - Pipeline state JSONL utilities
 │       └── storage_utils.py   - Hashed cache path + atomic moves
 ├── backend/tests/
 │   └── test_orchestrator_integration.py - End-to-end pipeline smoke test (opt-in)
 ├── scripts/
-│   └── build_unix.sh     - Builds standalone binary with bundled ffmpeg
+│   ├── build_unix.sh     - Builds standalone binary with bundled ffmpeg
+│   └── use_local_python.sh - Run project modules via the local venv
 ├── songs/               # Music library (MP3 files)
 ├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
 ├── .metadata/           # Local Postgres data (ignored)
@@ -190,7 +194,17 @@ try {
   eval "$(python backend/db/local_postgres.py env)"
   ```
 - **Bundle Support**: If `POSTGRES_BUNDLE_URL` (or OS-specific URL env vars) is set, it will auto-download a Postgres+pgvector bundle into `backend/processing/bin/postgres` and use it. Use `POSTGRES_BUNDLE_ARCHIVE_ROOT` if the archive has a top-level folder to strip.
+- **Manifest Support**: `POSTGRES_BUNDLE_MANIFEST` (default `backend/processing/postgres_bundle.json`) can supply per-OS bundle URLs + SHA256.
 - **Overrides**: `POSTGRES_BUNDLE_DIR` sets the bundle destination; `SONGBASE_METADATA_DIR` sets the `.metadata` root.
+
+### backend/db/build_postgres_bundle.py
+- **Purpose**: Build a local Postgres+pgvector bundle and print the URL + SHA256 to configure downloads.
+- **Requires**: `pg_config` on PATH, plus pgvector installed in the same Postgres prefix.
+- **Usage**:
+  ```bash
+  python backend/db/build_postgres_bundle.py
+  python backend/db/build_postgres_bundle.py --write-manifest
+  ```
 
 ### backend/db/ingest.py
 - **Purpose**: Ingest MP3 metadata and SHA IDs, optionally insert VGGish embeddings
@@ -319,6 +333,17 @@ try {
     python backend/processing/metadata_pipeline/image_cli.py --limit-songs 100
   ```
 
+## Local Python Runner
+
+Use the wrapper to ensure local module resolution and a `.venv` Python interpreter:
+
+```bash
+./scripts/use_local_python.sh -m backend.db.local_postgres ensure
+./scripts/use_local_python.sh -m backend.processing.run_pipeline --process-limit 25
+```
+
+`backend.processing.run_pipeline` installs Python dependencies on first run (using `backend/api/requirements.txt`). To install offline, set `SONGBASE_WHEELHOUSE_DIR` to a local wheelhouse directory.
+
 ## Testing
 
 ### backend/tests/test_orchestrator_integration.py
@@ -373,6 +398,14 @@ try {
 - **Purpose**: Build standalone binary with PyInstaller (macOS/Linux)
 - **Requires**: Python, PyInstaller, ffmpeg at `backend/processing/bin/ffmpeg`
 - **Output**: `dist/mp3-to-pcm`
+
+### scripts/use_local_python.sh
+- **Purpose**: Run project modules with the local `.venv` and project root on `PYTHONPATH`.
+- **Usage**:
+  ```bash
+  ./scripts/use_local_python.sh -m backend.db.local_postgres ensure
+  ./scripts/use_local_python.sh -m backend.processing.run_pipeline --process-limit 25
+  ```
 
 ## Distribution Strategy
 - **Mode**: Plug-and-play standalone binaries (PyInstaller) for the target OS.

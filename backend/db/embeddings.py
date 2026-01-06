@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-from pgvector import Vector
+from pgvector.psycopg import Vector
 
 from backend.processing.audio_pipeline import config as vggish_config
 

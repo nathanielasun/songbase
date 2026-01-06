@@ -17,6 +17,7 @@ CLAUDE.md
 #downloadable dependencies
 /backend/processing/vggish
 !/backend/processing/vggish/.gitkeep
+/backend/processing/bin/postgres
 
 # Python
 __pycache__/
@@ -24,6 +25,7 @@ __pycache__/
 *$py.class
 *.so
 .Python
+.venv/
 env/
 venv/
 ENV/

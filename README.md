@@ -96,6 +96,17 @@ songbase/
 
 The frontend proxies API requests to the backend automatically. API calls to `/api/*` from the frontend are forwarded to `http://localhost:8000/api/*`.
 
+## Local Python Runner
+
+Use the local Python wrapper to ensure commands resolve the project modules and run inside `.venv`:
+
+```bash
+./scripts/use_local_python.sh -m backend.db.local_postgres ensure
+./scripts/use_local_python.sh -m backend.processing.run_pipeline --process-limit 25
+```
+
+The `backend.processing.run_pipeline` entrypoint installs Python dependencies on first run using `backend/api/requirements.txt`. To install offline, set `SONGBASE_WHEELHOUSE_DIR` to a local wheelhouse.
+
 ## Processing Orchestrator
 
 The processing orchestrator ties acquisition, PCM conversion, hashing, embeddings, and storage into one pipeline.
@@ -116,6 +127,18 @@ eval "$(python backend/db/local_postgres.py env)"
 ```
 
 To use the bundled Postgres+pgvector binaries, set `POSTGRES_BUNDLE_URL` (or OS-specific variants like `POSTGRES_BUNDLE_URL_DARWIN_ARM64`) and optional `POSTGRES_BUNDLE_SHA256` before running the bootstrap. If your archive wraps files under a top-level folder, set `POSTGRES_BUNDLE_ARCHIVE_ROOT` to strip it. You can override the bundle destination with `POSTGRES_BUNDLE_DIR` and the metadata root with `SONGBASE_METADATA_DIR`.
+
+To generate a local bundle URL + SHA, run:
+
+```bash
+python backend/db/build_postgres_bundle.py
+```
+
+To persist bundle URLs, set `POSTGRES_BUNDLE_MANIFEST` or write the manifest directly with:
+
+```bash
+python backend/db/build_postgres_bundle.py --write-manifest
+```
 
 ## Image Metadata Database
 

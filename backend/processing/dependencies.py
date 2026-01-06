@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import platform
 import sys
@@ -52,6 +53,9 @@ def _postgres_bundle_dir() -> Path:
 
 POSTGRES_BUNDLE_DIR = _postgres_bundle_dir()
 POSTGRES_BUNDLE_MARKER = POSTGRES_BUNDLE_DIR / ".bundle_ready"
+POSTGRES_BUNDLE_MANIFEST = Path(
+    os.environ.get("POSTGRES_BUNDLE_MANIFEST", PROCESSING_DIR / "postgres_bundle.json")
+)
 
 VGGISH_SOURCE_BASE_URL = (
     "https://raw.githubusercontent.com/tensorflow/models/master/"
@@ -78,6 +82,60 @@ def _default_ffmpeg_url() -> str | None:
     return None
 
 
+def _postgres_bundle_platform_key() -> str | None:
+    system = sys.platform
+    machine = platform.machine().lower()
+    if system == "darwin":
+        system_key = "darwin"
+    elif system.startswith("linux"):
+        system_key = "linux"
+    elif system in {"win32", "cygwin"} or system.startswith("win"):
+        system_key = "windows"
+    else:
+        return None
+
+    if machine in {"x86_64", "amd64"}:
+        arch = "x86_64"
+    elif machine in {"aarch64", "arm64"}:
+        arch = "arm64"
+    else:
+        arch = machine
+    return f"{system_key}_{arch}"
+
+
+def _load_postgres_bundle_manifest() -> dict:
+    if not POSTGRES_BUNDLE_MANIFEST.exists():
+        return {}
+    try:
+        data = json.loads(POSTGRES_BUNDLE_MANIFEST.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _postgres_bundle_manifest_entry() -> dict:
+    key = _postgres_bundle_platform_key()
+    if not key:
+        return {}
+    data = _load_postgres_bundle_manifest()
+    entry = data.get(key, {})
+    if isinstance(entry, dict):
+        return entry
+    return {}
+
+
+def _postgres_bundle_manifest_value(name: str) -> str | None:
+    entry = _postgres_bundle_manifest_entry()
+    value = entry.get(name)
+    if isinstance(value, str):
+        value = value.strip()
+        if value:
+            return value
+    return None
+
+
 def _default_postgres_bundle_url() -> str | None:
     override = os.environ.get("POSTGRES_BUNDLE_URL")
     if override:
@@ -95,7 +153,7 @@ def _default_postgres_bundle_url() -> str | None:
             return os.environ.get("POSTGRES_BUNDLE_URL_LINUX_AMD64")
         if machine in {"aarch64", "arm64"}:
             return os.environ.get("POSTGRES_BUNDLE_URL_LINUX_ARM64")
-    return None
+    return _postgres_bundle_manifest_value("url")
 
 
 def _default_postgres_bundle_sha256() -> str | None:
@@ -115,11 +173,13 @@ def _default_postgres_bundle_sha256() -> str | None:
             return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_LINUX_AMD64", ""))
         if machine in {"aarch64", "arm64"}:
             return _normalize_sha256(os.environ.get("POSTGRES_BUNDLE_SHA256_LINUX_ARM64", ""))
-    return None
+    return _normalize_sha256(_postgres_bundle_manifest_value("sha256") or "")
 
 
 def _postgres_bundle_archive_root() -> str | None:
     value = os.environ.get("POSTGRES_BUNDLE_ARCHIVE_ROOT")
+    if not value:
+        value = _postgres_bundle_manifest_value("archive_root")
     if not value:
         return None
     return value.strip().strip("/")
