@@ -51,6 +51,8 @@ songbase/
 │       │   ├── cli.py           - CLI for song acquisition (yt-dlp)
 │       │   ├── config.py        - Acquisition settings + cache paths
 │       │   ├── db.py            - Download queue DB helpers
+│       │   ├── discovery.py     - Song list discovery + sources.jsonl writer
+│       │   ├── discovery_providers.py - External discovery routines (MusicBrainz, hotlists)
 │       │   ├── downloader.py    - yt-dlp download worker
 │       │   ├── io.py            - Metadata JSON writer
 │       │   ├── pipeline.py      - Parallel download orchestration
@@ -64,13 +66,14 @@ songbase/
 │       ├── vggish/
 │       │   └── .gitkeep       - Placeholder for VGGish files
 │       ├── dependencies.py    - Ensures local package dependencies are present
-│       └── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
+│       ├── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
+│       └── orchestrator.py    - End-to-end processing pipeline runner
 ├── scripts/
 │   └── build_unix.sh     - Builds standalone binary with bundled ffmpeg
 ├── songs/               # Music library (MP3 files)
 ├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
 ├── .song_cache/         # SHA-256 hashed song database
-├── STATUS/              # Project planning and status docs
+├── STATUS/              # Project planning and status docs (see STATUS/processing-backend-plan.md)
 └── dev.sh               # Development server startup script
 ```
 
@@ -183,6 +186,15 @@ try {
   # Optional: add --overwrite to replace existing .wav files
   ```
 
+### backend/processing/orchestrator.py
+- **Purpose**: End-to-end orchestration of download, PCM conversion, hashing, embeddings, and storage.
+- **Requires**: `SONGBASE_DATABASE_URL` set, ffmpeg, and VGGish assets.
+- **Usage**:
+  ```bash
+  SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
+  ```
+- **Notes**: Appends progress events to `preprocessed_cache/pipeline_state.jsonl`.
+
 ### backend/processing/audio_pipeline/
 - **Purpose**: Structured WAV-to-embedding pipeline with modular components
 - **Key Modules**:
@@ -250,6 +262,8 @@ try {
   - `cli.py`: Command-line interface for acquisition
   - `config.py`: Cache locations + yt-dlp settings
   - `db.py`: Download queue helpers (reads `metadata.download_queue`)
+  - `discovery.py`: Song list discovery + sources.jsonl writer (no downloads)
+  - `discovery_providers.py`: External discovery routines (MusicBrainz, hotlists)
   - `downloader.py`: yt-dlp download worker
   - `io.py`: Writes JSON metadata sidecars
   - `pipeline.py`: Parallel download orchestration
@@ -270,6 +284,14 @@ try {
 - **Output**:
   - MP3s written to `preprocessed_cache/`
   - JSON metadata sidecar per MP3 (same filename, `.json` extension)
+
+### backend/processing/acquisition_pipeline/discovery.py
+- **Purpose**: Discover new song lists (genre similarity, same artist/album, hotlists) and append to `sources.jsonl`
+- **Requires**: `SONGBASE_DATABASE_URL` set, plus musicbrainzngs; hotlists are optional via `SONGBASE_HOTLIST_URLS`
+- **Usage**:
+  ```bash
+  SONGBASE_DATABASE_URL=postgres://... python backend/processing/acquisition_pipeline/discovery.py --dry-run
+  ```
 
 ## Scripts
 

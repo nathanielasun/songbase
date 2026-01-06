@@ -81,15 +81,24 @@ songbase/
 │   │   └── app.py     # Main API application
 │   └── processing/    # Audio processing modules
 │       ├── mp3_to_pcm.py
+│       ├── orchestrator.py
 │       └── audio_pipeline/
 ├── songs/             # Music library (MP3 files)
 ├── .song_cache/       # SHA-256 hashed song database
-└── STATUS/            # Project planning and status docs
+└── STATUS/            # Project planning and status docs (see STATUS/processing-backend-plan.md)
 ```
 
 ## Development
 
 The frontend proxies API requests to the backend automatically. API calls to `/api/*` from the frontend are forwarded to `http://localhost:8000/api/*`.
+
+## Processing Orchestrator
+
+The processing orchestrator ties acquisition, PCM conversion, hashing, embeddings, and storage into one pipeline.
+
+```bash
+SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
+```
 
 ## Building Desktop Application
 

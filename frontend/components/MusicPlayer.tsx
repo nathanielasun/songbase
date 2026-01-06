@@ -9,24 +9,48 @@ import {
   BackwardIcon,
   SpeakerWaveIcon,
   SpeakerXMarkIcon,
+  ArrowPathIcon,
+  ArrowsRightLeftIcon,
+  HeartIcon,
+  HandThumbDownIcon,
 } from '@heroicons/react/24/solid';
-import { Song } from '@/lib/types';
+import {
+  ArrowPathIcon as ArrowPathOutlineIcon,
+  ArrowsRightLeftIcon as ArrowsRightLeftOutlineIcon,
+  HeartIcon as HeartOutlineIcon,
+  HandThumbDownIcon as HandThumbDownOutlineIcon,
+} from '@heroicons/react/24/outline';
+import { Song, RepeatMode } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
 
 interface MusicPlayerProps {
   currentSong: Song | null;
   isPlaying: boolean;
+  repeatMode: RepeatMode;
+  shuffleEnabled: boolean;
   onPlayPause: () => void;
   onNext: () => void;
   onPrevious: () => void;
+  onRepeatToggle: () => void;
+  onShuffleToggle: () => void;
+  onLike: (songId: string) => void;
+  onDislike: (songId: string) => void;
+  onSongEnd?: () => void;
 }
 
 export default function MusicPlayer({
   currentSong,
   isPlaying,
+  repeatMode,
+  shuffleEnabled,
   onPlayPause,
   onNext,
   onPrevious,
+  onRepeatToggle,
+  onShuffleToggle,
+  onLike,
+  onDislike,
+  onSongEnd,
 }: MusicPlayerProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(70);
@@ -40,7 +64,10 @@ export default function MusicPlayer({
     if (isPlaying && currentSong) {
       const interval = setInterval(() => {
         setCurrentTime((prev) => {
-          if (prev >= duration) {
+          if (prev >= duration - 1) {
+            if (onSongEnd) {
+              onSongEnd();
+            }
             return 0;
           }
           return prev + 1;
@@ -48,7 +75,7 @@ export default function MusicPlayer({
       }, 1000);
       return () => clearInterval(interval);
     }
-  }, [isPlaying, currentSong, duration]);
+  }, [isPlaying, currentSong, duration, onSongEnd]);
 
   const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!progressRef.current || !currentSong) return;
@@ -70,6 +97,18 @@ export default function MusicPlayer({
     setIsMuted(!isMuted);
   };
 
+  const handleLike = () => {
+    if (currentSong) {
+      onLike(currentSong.id);
+    }
+  };
+
+  const handleDislike = () => {
+    if (currentSong) {
+      onDislike(currentSong.id);
+    }
+  };
+
   if (!currentSong) {
     return (
       <div className="h-24 bg-gray-900 border-t border-gray-800 flex items-center justify-center text-gray-500">
@@ -78,9 +117,12 @@ export default function MusicPlayer({
     );
   }
 
+  const isLiked = currentSong.liked || false;
+  const isDisliked = currentSong.disliked || false;
+
   return (
     <div className="h-24 bg-gray-900 border-t border-gray-800 px-4 flex items-center justify-between">
-      {/* Song Info */}
+      {/* Song Info with Like/Dislike */}
       <div className="flex items-center gap-4 w-1/4">
         {currentSong.albumArt && (
           <Image
@@ -95,17 +137,63 @@ export default function MusicPlayer({
           <p className="text-white text-sm font-semibold truncate">{currentSong.title}</p>
           <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
         </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleLike}
+            className={`transition-colors ${
+              isLiked ? 'text-green-500' : 'text-gray-400 hover:text-green-500'
+            }`}
+            title={isLiked ? 'Unlike' : 'Like'}
+          >
+            {isLiked ? (
+              <HeartIcon className="w-5 h-5" />
+            ) : (
+              <HeartOutlineIcon className="w-5 h-5" />
+            )}
+          </button>
+          <button
+            onClick={handleDislike}
+            className={`transition-colors ${
+              isDisliked ? 'text-red-500' : 'text-gray-400 hover:text-red-500'
+            }`}
+            title={isDisliked ? 'Remove dislike' : 'Dislike'}
+          >
+            {isDisliked ? (
+              <HandThumbDownIcon className="w-5 h-5" />
+            ) : (
+              <HandThumbDownOutlineIcon className="w-5 h-5" />
+            )}
+          </button>
+        </div>
       </div>
 
       {/* Player Controls */}
       <div className="flex flex-col items-center gap-2 w-2/4">
         <div className="flex items-center gap-4">
+          {/* Shuffle Button */}
+          <button
+            onClick={onShuffleToggle}
+            className={`transition-colors ${
+              shuffleEnabled ? 'text-green-500' : 'text-gray-400 hover:text-white'
+            }`}
+            title={shuffleEnabled ? 'Shuffle on' : 'Shuffle off'}
+          >
+            {shuffleEnabled ? (
+              <ArrowsRightLeftIcon className="w-4 h-4" />
+            ) : (
+              <ArrowsRightLeftOutlineIcon className="w-4 h-4" />
+            )}
+          </button>
+
+          {/* Previous Button */}
           <button
             onClick={onPrevious}
             className="text-gray-400 hover:text-white transition-colors"
           >
             <BackwardIcon className="w-5 h-5" />
           </button>
+
+          {/* Play/Pause Button */}
           <button
             onClick={onPlayPause}
             className="bg-white text-black rounded-full p-2 hover:scale-105 transition-transform"
@@ -116,11 +204,39 @@ export default function MusicPlayer({
               <PlayIcon className="w-5 h-5" />
             )}
           </button>
+
+          {/* Next Button */}
           <button
             onClick={onNext}
             className="text-gray-400 hover:text-white transition-colors"
           >
             <ForwardIcon className="w-5 h-5" />
+          </button>
+
+          {/* Repeat Button */}
+          <button
+            onClick={onRepeatToggle}
+            className={`relative transition-colors ${
+              repeatMode !== 'off' ? 'text-green-500' : 'text-gray-400 hover:text-white'
+            }`}
+            title={
+              repeatMode === 'off'
+                ? 'Repeat off'
+                : repeatMode === 'once'
+                ? 'Repeat once'
+                : 'Repeat all'
+            }
+          >
+            {repeatMode !== 'off' ? (
+              <ArrowPathIcon className="w-4 h-4" />
+            ) : (
+              <ArrowPathOutlineIcon className="w-4 h-4" />
+            )}
+            {repeatMode === 'once' && (
+              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] font-bold">
+                1
+              </span>
+            )}
           </button>
         </div>
 

@@ -45,6 +45,38 @@ def load_sources_file(path: Path) -> list[SourceItem]:
     return items
 
 
+def source_item_to_dict(item: SourceItem) -> dict:
+    payload: dict[str, str] = {"title": item.title}
+    if item.artist:
+        payload["artist"] = item.artist
+    if item.album:
+        payload["album"] = item.album
+    if item.genre:
+        payload["genre"] = item.genre
+    if item.search_query:
+        payload["search_query"] = item.search_query
+    if item.source_url:
+        payload["source_url"] = item.source_url
+    return payload
+
+
+def append_sources_file(items: Iterable[SourceItem], path: Path | None = None) -> int:
+    sources_path = path or config.SOURCES_PATH
+    sources_path.parent.mkdir(parents=True, exist_ok=True)
+
+    count = 0
+    with sources_path.open("a", encoding="utf-8") as handle:
+        for item in items:
+            payload = source_item_to_dict(item)
+            title = payload.get("title")
+            if not title:
+                continue
+            handle.write(json.dumps(payload, ensure_ascii=True) + "\n")
+            count += 1
+
+    return count
+
+
 def insert_sources(items: Iterable[SourceItem]) -> int:
     rows = [
         (
