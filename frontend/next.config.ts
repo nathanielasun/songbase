@@ -5,6 +5,16 @@ const isElectron = process.env.BUILD_TARGET === 'electron';
 const nextConfig: NextConfig = {
   output: isElectron ? 'export' : undefined,
 
+  images: {
+    remotePatterns: [
+      {
+        protocol: 'https',
+        hostname: 'picsum.photos',
+        pathname: '/**',
+      },
+    ],
+  },
+
   async rewrites() {
     if (isElectron) return [];
 

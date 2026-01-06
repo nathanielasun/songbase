@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
-from backend.processing.config import AUDIO_SAMPLE_RATE, FFMPEG_THREADS
+from backend.processing import mp3_to_pcm
+from backend.processing.audio_pipeline import config as audio_config
 
 router = APIRouter()
 
@@ -16,20 +17,31 @@ class ProcessingStatus(BaseModel):
 @router.get("/config")
 async def get_processing_config():
     return {
-        "audio_sample_rate": AUDIO_SAMPLE_RATE,
-        "ffmpeg_threads": FFMPEG_THREADS
+        "audio_sample_rate": audio_config.TARGET_SAMPLE_RATE,
+        "ffmpeg_threads": mp3_to_pcm.DEFAULT_THREADS
     }
 
 @router.post("/convert")
 async def convert_mp3_to_pcm(input_path: str, output_path: str, threads: Optional[int] = None):
     try:
-        from backend.processing.mp3_to_pcm import convert_directory
+        results = mp3_to_pcm.convert_directory(
+            input_path,
+            output_path,
+            threads=threads or mp3_to_pcm.DEFAULT_THREADS,
+            verbose=False,
+        )
 
-        convert_directory(input_path, output_path, threads or FFMPEG_THREADS)
+        if results["total"] == 0:
+            message = f"No .mp3 files found under {input_path}"
+        else:
+            message = (
+                f"Converted {results['converted']} of {results['total']} file(s) "
+                f"from {input_path} to {output_path}"
+            )
 
         return ProcessingStatus(
             status="success",
-            message=f"Converted MP3 files from {input_path} to {output_path}"
+            message=message
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

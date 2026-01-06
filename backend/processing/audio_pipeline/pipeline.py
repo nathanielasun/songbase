@@ -5,7 +5,10 @@ from typing import Optional
 
 from . import config
 
-import dependencies
+try:
+    from .. import dependencies
+except ImportError:
+    import dependencies
 from .embedding import embed_examples, pcm_to_examples
 from .io import load_wav
 from .preprocessing import resample, to_mono

@@ -81,7 +81,7 @@ songbase/
 │   │   └── app.py     # Main API application
 │   └── processing/    # Audio processing modules
 │       ├── mp3_to_pcm.py
-│       └── vggish_tokenize.py
+│       └── audio_pipeline/
 ├── songs/             # Music library (MP3 files)
 ├── .song_cache/       # SHA-256 hashed song database
 └── STATUS/            # Project planning and status docs
@@ -134,4 +134,3 @@ npm run electron:dev
 ```
 
 The Electron window will load `http://localhost:3000` in development mode.
-

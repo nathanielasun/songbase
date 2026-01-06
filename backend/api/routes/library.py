@@ -80,7 +80,15 @@ async def list_songs(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT sha_id, title, album, duration_sec, release_year, track_number
+                SELECT
+                    sha_id,
+                    title,
+                    album,
+                    duration_sec,
+                    release_year,
+                    track_number,
+                    verified,
+                    verification_source
                 FROM metadata.songs
                 ORDER BY created_at DESC
                 LIMIT %s OFFSET %s
@@ -97,6 +105,8 @@ async def list_songs(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
             "duration_sec": row[3],
             "release_year": row[4],
             "track_number": row[5],
+            "verified": row[6],
+            "verification_source": row[7],
         }
         for row in rows
     ]
@@ -115,6 +125,10 @@ async def get_song(sha_id: str) -> dict[str, Any]:
                     s.duration_sec,
                     s.release_year,
                     s.track_number,
+                    s.verified,
+                    s.verification_source,
+                    s.verification_score,
+                    s.musicbrainz_recording_id,
                     COALESCE(
                         ARRAY_AGG(DISTINCT a.name)
                         FILTER (WHERE a.name IS NOT NULL),
@@ -161,8 +175,12 @@ async def get_song(sha_id: str) -> dict[str, Any]:
         "duration_sec": row[3],
         "release_year": row[4],
         "track_number": row[5],
-        "artists": row[6],
-        "genres": row[7],
-        "labels": row[8],
-        "producers": row[9],
+        "verified": row[6],
+        "verification_source": row[7],
+        "verification_score": row[8],
+        "musicbrainz_recording_id": row[9],
+        "artists": row[10],
+        "genres": row[11],
+        "labels": row[12],
+        "producers": row[13],
     }

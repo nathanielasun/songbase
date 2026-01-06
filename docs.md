@@ -22,7 +22,9 @@ songbase/
 │   │   └── requirements.txt  - API dependencies
 │   ├── db/            # Postgres schema + ingestion tools
 │   │   ├── migrations/
-│   │   │   └── 001_init.sql  - Metadata + embeddings schema with pgvector
+│   │   │   ├── 001_init.sql  - Metadata + embeddings schema with pgvector
+│   │   │   ├── 002_add_metadata_verification.sql - Adds verification metadata columns
+│   │   │   └── 003_add_download_queue.sql - Adds download queue table
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── ingest.py         - MP3 metadata + embeddings ingestion CLI
 │   │   └── migrate.py        - Migration runner
@@ -44,15 +46,29 @@ songbase/
 │       │   ├── io.py            - WAV load/save + metadata helpers
 │       │   ├── pipeline.py      - WAV → normalized WAV orchestration
 │       │   └── preprocessing.py - Resample/mono/normalize/trim utilities
+│       ├── acquisition_pipeline/
+│       │   ├── __init__.py      - Package entry point for acquisition helpers
+│       │   ├── cli.py           - CLI for song acquisition (yt-dlp)
+│       │   ├── config.py        - Acquisition settings + cache paths
+│       │   ├── db.py            - Download queue DB helpers
+│       │   ├── downloader.py    - yt-dlp download worker
+│       │   ├── io.py            - Metadata JSON writer
+│       │   ├── pipeline.py      - Parallel download orchestration
+│       │   └── sources.py       - Extendable song source list reader
+│       ├── metadata_pipeline/
+│       │   ├── __init__.py       - Package entry point for verification helpers
+│       │   ├── cli.py            - CLI for MusicBrainz verification
+│       │   ├── config.py         - MusicBrainz configuration defaults
+│       │   ├── musicbrainz_client.py - MusicBrainz API wrapper
+│       │   └── pipeline.py       - Unverified song verification flow
 │       ├── vggish/
 │       │   └── .gitkeep       - Placeholder for VGGish files
-│       ├── config.py          - Deprecated shim for audio_pipeline.config
 │       ├── dependencies.py    - Ensures local package dependencies are present
-│       ├── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
-│       └── vggish_tokenize.py - Deprecated wrapper for pipeline CLI
+│       └── mp3_to_pcm.py      - Bulk MP3 to PCM conversion
 ├── scripts/
 │   └── build_unix.sh     - Builds standalone binary with bundled ffmpeg
 ├── songs/               # Music library (MP3 files)
+├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
 ├── .song_cache/         # SHA-256 hashed song database
 ├── STATUS/              # Project planning and status docs
 └── dev.sh               # Development server startup script
@@ -160,7 +176,7 @@ try {
 
 ### backend/processing/mp3_to_pcm.py
 - **Purpose**: Bulk MP3 to PCM WAV conversion
-- **Requires**: ffmpeg (bundled at backend/processing/bin/ffmpeg or on PATH)
+- **Requires**: ffmpeg (auto-downloads to `backend/processing/bin/ffmpeg` when missing, or uses PATH)
 - **Usage**:
   ```bash
   python backend/processing/mp3_to_pcm.py /path/to/mp3s /path/to/output --threads=8
@@ -190,6 +206,7 @@ try {
   - Auto-downloads missing files when `SONGBASE_ALLOW_DOWNLOAD=1` (default).
   - Verifies SHA-256 when available; set `SONGBASE_FORCE_DOWNLOAD=1` to re-download.
   - Optional download URLs can be provided via env vars (example: `FFMPEG_DOWNLOAD_URL`).
+  - ffmpeg defaults are platform-aware; override when running on an unsupported CPU/OS.
 - **Usage**:
   ```bash
   python backend/processing/dependencies.py --name vggish_assets
@@ -211,11 +228,54 @@ try {
   python backend/processing/hash_pipeline/cli.py /path/to/wavs /path/to/normalized
   ```
 
+### backend/processing/metadata_pipeline/
+- **Purpose**: Verify and enrich unverified songs via MusicBrainz
+- **Key Modules**:
+  - `cli.py`: Command-line interface for verification
+  - `config.py`: MusicBrainz configuration defaults
+  - `musicbrainz_client.py`: MusicBrainz API wrapper
+  - `pipeline.py`: Unverified song verification flow
+
+### backend/processing/metadata_pipeline/cli.py
+- **Purpose**: Verify and enrich unverified songs with MusicBrainz
+- **Requires**: `SONGBASE_DATABASE_URL` set, plus musicbrainzngs
+- **Usage**:
+  ```bash
+  SONGBASE_DATABASE_URL=postgres://... python backend/processing/metadata_pipeline/cli.py --limit 100
+  ```
+
+### backend/processing/acquisition_pipeline/
+- **Purpose**: Download pending songs into `preprocessed_cache/` using yt-dlp
+- **Key Modules**:
+  - `cli.py`: Command-line interface for acquisition
+  - `config.py`: Cache locations + yt-dlp settings
+  - `db.py`: Download queue helpers (reads `metadata.download_queue`)
+  - `downloader.py`: yt-dlp download worker
+  - `io.py`: Writes JSON metadata sidecars
+  - `pipeline.py`: Parallel download orchestration
+  - `sources.py`: Extendable JSONL song list ingestion
+  - `sources.jsonl`: Default song source list
+
+### backend/processing/acquisition_pipeline/cli.py
+- **Purpose**: Seed the download queue and fetch MP3s in parallel
+- **Requires**: `SONGBASE_DATABASE_URL` set, plus yt-dlp (and ffmpeg)
+- **Usage**:
+  ```bash
+  SONGBASE_DATABASE_URL=postgres://... python backend/processing/acquisition_pipeline/cli.py --workers 4
+  ```
+- **Sources File Format** (`backend/processing/acquisition_pipeline/sources.jsonl`):
+  ```json
+  {"title": "Example Song", "artist": "Example Artist", "search_query": "Example Artist - Example Song"}
+  ```
+- **Output**:
+  - MP3s written to `preprocessed_cache/`
+  - JSON metadata sidecar per MP3 (same filename, `.json` extension)
+
 ## Scripts
 
 ### scripts/build_unix.sh
 - **Purpose**: Build standalone binary with PyInstaller (macOS/Linux)
-- **Requires**: Python, PyInstaller, ffmpeg at backend/processing/bin/ffmpeg
+- **Requires**: Python, PyInstaller, ffmpeg at `backend/processing/bin/ffmpeg`
 - **Output**: `dist/mp3-to-pcm`
 
 ## Distribution Strategy

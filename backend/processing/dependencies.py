@@ -2,16 +2,20 @@ from __future__ import annotations
 
 import hashlib
 import os
+import platform
 import sys
+import tarfile
 import urllib.request
+import zipfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-if __package__ is None:
+if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from audio_pipeline import config as vggish_config
+    from audio_pipeline import config as vggish_config
+else:
+    from .audio_pipeline import config as vggish_config
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,7 @@ class DependencyFile:
     url_env: str | None = None
     sha256: str | None = None
     executable: bool = False
+    archive_member: str | None = None
 
 
 @dataclass(frozen=True)
@@ -37,6 +42,25 @@ VGGISH_SOURCE_BASE_URL = (
     "https://raw.githubusercontent.com/tensorflow/models/master/"
     "research/audioset/vggish"
 )
+
+
+def _default_ffmpeg_url() -> str | None:
+    system = sys.platform
+    machine = platform.machine().lower()
+    if system == "darwin":
+        return "https://evermeet.cx/ffmpeg/ffmpeg-6.1.1.zip"
+    if system.startswith("linux"):
+        if machine in {"x86_64", "amd64"}:
+            return (
+                "https://johnvansickle.com/ffmpeg/releases/"
+                "ffmpeg-release-amd64-static.tar.xz"
+            )
+        if machine in {"aarch64", "arm64"}:
+            return (
+                "https://johnvansickle.com/ffmpeg/releases/"
+                "ffmpeg-release-arm64-static.tar.xz"
+            )
+    return None
 
 def _normalize_sha256(value: str) -> str | None:
     if value.startswith("sha256:"):
@@ -124,13 +148,17 @@ DEPENDENCIES: dict[str, Dependency] = {
             DependencyFile(
                 name="ffmpeg",
                 path=PROCESSING_DIR / "bin" / "ffmpeg",
+                url=_default_ffmpeg_url(),
                 url_env="FFMPEG_DOWNLOAD_URL",
                 sha256=_normalize_sha256(os.environ.get("FFMPEG_SHA256", "")),
                 executable=True,
+                archive_member="ffmpeg",
             ),
         ),
     ),
 }
+
+_FIRST_RUN_READY = False
 
 
 def _parse_bool_env(name: str, default: bool) -> bool:
@@ -148,7 +176,11 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _download_file(url: str, dest_path: Path) -> None:
+def _download_file(
+    url: str,
+    dest_path: Path,
+    archive_member: str | None = None,
+) -> None:
     dest_path.parent.mkdir(parents=True, exist_ok=True)
     temp_path = dest_path.with_suffix(dest_path.suffix + ".download")
     if temp_path.exists():
@@ -160,8 +192,67 @@ def _download_file(url: str, dest_path: Path) -> None:
             if not chunk:
                 break
             handle.write(chunk)
+    try:
+        if zipfile.is_zipfile(temp_path) or tarfile.is_tarfile(temp_path):
+            _extract_archive(temp_path, dest_path, archive_member)
+        else:
+            temp_path.replace(dest_path)
+    finally:
+        if temp_path.exists():
+            temp_path.unlink()
 
-    temp_path.replace(dest_path)
+
+def _extract_archive(
+    archive_path: Path,
+    dest_path: Path,
+    member_name: str | None,
+) -> None:
+    target_name = member_name or dest_path.name
+    if zipfile.is_zipfile(archive_path):
+        with zipfile.ZipFile(archive_path) as archive:
+            match = _select_archive_member(archive.namelist(), target_name)
+            if not match:
+                raise RuntimeError(
+                    f"Expected {target_name} in archive {archive_path.name}"
+                )
+            with archive.open(match) as src, dest_path.open("wb") as dst:
+                _copy_stream(src, dst)
+        return
+
+    if tarfile.is_tarfile(archive_path):
+        with tarfile.open(archive_path) as archive:
+            members = [m for m in archive.getmembers() if m.isfile()]
+            names = [m.name for m in members]
+            match = _select_archive_member(names, target_name)
+            if not match:
+                raise RuntimeError(
+                    f"Expected {target_name} in archive {archive_path.name}"
+                )
+            member = next(m for m in members if m.name == match)
+            extracted = archive.extractfile(member)
+            if extracted is None:
+                raise RuntimeError(
+                    f"Unable to extract {match} from {archive_path.name}"
+                )
+            with extracted, dest_path.open("wb") as dst:
+                _copy_stream(extracted, dst)
+        return
+
+    raise RuntimeError(f"Unsupported archive type: {archive_path.name}")
+
+
+def _select_archive_member(names: list[str], target_name: str) -> str | None:
+    if target_name in names:
+        return target_name
+    for name in names:
+        if name.endswith(f"/{target_name}") or name == target_name:
+            return name
+    return None
+
+
+def _copy_stream(src, dst) -> None:
+    for chunk in iter(lambda: src.read(1024 * 1024), b""):
+        dst.write(chunk)
 
 
 def _resolve_url(dep_file: DependencyFile) -> str | None:
@@ -194,6 +285,14 @@ def ensure_dependencies(
             _ensure_file(dep, dep_file, allow_download, force_download)
 
 
+def ensure_first_run_dependencies() -> None:
+    global _FIRST_RUN_READY
+    if _FIRST_RUN_READY:
+        return
+    ensure_dependencies(["ffmpeg", "vggish_source", "vggish_assets"])
+    _FIRST_RUN_READY = True
+
+
 def _ensure_file(
     dep: Dependency,
     dep_file: DependencyFile,
@@ -215,7 +314,7 @@ def _ensure_file(
             "or install it manually."
         )
 
-    _download_file(url, path)
+    _download_file(url, path, dep_file.archive_member)
     _verify_file(dep, dep_file)
 
     if dep_file.executable:

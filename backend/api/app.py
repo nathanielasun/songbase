@@ -1,6 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import songs, processing, library
+from backend.processing import dependencies
 
 app = FastAPI(
     title="Songbase API",
@@ -19,6 +20,10 @@ app.add_middleware(
 app.include_router(songs.router, prefix="/api/songs", tags=["songs"])
 app.include_router(processing.router, prefix="/api/processing", tags=["processing"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
+
+@app.on_event("startup")
+async def ensure_runtime_dependencies() -> None:
+    dependencies.ensure_first_run_dependencies()
 
 @app.get("/")
 async def root():

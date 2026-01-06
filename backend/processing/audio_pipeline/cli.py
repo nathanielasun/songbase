@@ -7,6 +7,8 @@ from pathlib import Path
 if __package__ is None:  # Allow running as a script.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+import dependencies
+
 from audio_pipeline.io import save_embedding
 from audio_pipeline.pipeline import embed_wav_file, embedding_metadata, output_path_for_wav
 
@@ -54,6 +56,7 @@ def resolve_output_path(
 
 def main() -> int:
     args = parse_args()
+    dependencies.ensure_first_run_dependencies()
     input_path = Path(args.input).expanduser().resolve()
     output_path = Path(args.output).expanduser().resolve()
 

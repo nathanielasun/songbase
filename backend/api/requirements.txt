@@ -6,3 +6,5 @@ numpy==2.2.3
 mutagen==1.47.0
 psycopg[binary]==3.2.3
 pgvector==0.3.6
+musicbrainzngs==0.7.1
+yt-dlp==2025.2.19
