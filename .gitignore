@@ -5,6 +5,13 @@
 /.song_cache/*
 !/.song_cache/.gitkeep
 
+#agent files
+AGENTS.md 
+CLAUDE.md
+
+#planning
+/STATUS
+
 # dependencies
 /node_modules
 /.pnp
