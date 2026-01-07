@@ -77,6 +77,18 @@ def append_sources_file(items: Iterable[SourceItem], path: Path | None = None) -
     return count
 
 
+def clear_sources_file(path: Path | None = None) -> int:
+    sources_path = path or config.SOURCES_PATH
+    cleared = 0
+    if sources_path.exists():
+        for line in sources_path.read_text(encoding="utf-8").splitlines():
+            if line.strip():
+                cleared += 1
+    sources_path.parent.mkdir(parents=True, exist_ok=True)
+    sources_path.write_text("", encoding="utf-8")
+    return cleared
+
+
 def insert_sources(items: Iterable[SourceItem]) -> int:
     rows = [
         (

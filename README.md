@@ -52,7 +52,7 @@ cd ..
 
 Terminal 1 - Backend API:
 ```bash
-./scripts/use_local_python.sh -m uvicorn backend.api.app:app --reload --port 8000
+./scripts/use_local_python.sh -m backend.api.server --reload --port 8000
 ```
 
 Terminal 2 - Frontend:
@@ -100,6 +100,12 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 
 - **Your Library** (`/library`): Queue songs, monitor download and processing status, and inspect database statistics.
 - **Settings** (`/settings`): Configure batch sizes, worker defaults, and storage paths (applies on next pipeline run or backend restart).
+- **Sync images default**: Image sync is enabled by default; toggle it in Settings or per-run in the pipeline form.
+- **Sources view**: The Downloads tab also shows entries from `backend/processing/acquisition_pipeline/sources.jsonl`.
+- **Queue de-dup**: Sources already queued move out of the sources list and appear only in the pipeline queue list.
+- **Seed sources**: Use the Downloads tab to insert `sources.jsonl` entries into the queue.
+- **Last seed timestamp**: The Sources view displays when the queue was last seeded.
+- **Queue cleanup**: The Downloads tab includes confirmation-protected controls to clear sources.jsonl entries or the pipeline queue.
 
 When the backend starts and database URLs are missing, it will automatically bootstrap the local Postgres cluster under `.metadata/`.
 
@@ -116,9 +122,16 @@ The `backend.processing.run_pipeline` entrypoint installs Python dependencies on
 
 If the wrapper selects an unsupported Python version, override it with `PYTHON_BIN=python3.12`.
 
+For the backend API, prefer the bootstrap-aware entrypoint:
+
+```bash
+./scripts/use_local_python.sh -m backend.api.server --reload --port 8000
+```
+
 ## Processing Orchestrator
 
 The processing orchestrator ties acquisition, PCM conversion, hashing, embeddings, and storage into one pipeline.
+Embeddings and normalization require TensorFlow and resampy; the bootstrap installs them automatically on first run.
 
 ```bash
 SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
@@ -128,7 +141,8 @@ Add `--images` to sync cover art and artist profiles after verification (require
 
 ## Local Postgres Databases
 
-Songbase can bootstrap two local Postgres databases under `.metadata/` (metadata + images). This requires a local Postgres install (`initdb`, `pg_ctl`, `psql`, `createdb`) and the pgvector extension. If the environment variables are not set, `dev.sh` will auto-run this bootstrap.
+Songbase can bootstrap two local Postgres databases under `.metadata/` (metadata + images). This requires a local Postgres install (`initdb`, `pg_ctl`, `psql`, `createdb`) and the pgvector extension. If the environment variables are not set, `dev.sh` will auto-run this bootstrap. The bootstrap auto-detects `pg_config`, Homebrew/Postgres.app, and asdf installs; set `POSTGRES_BIN_DIR` if detection fails.
+The connection helper will create the `vector` extension on first connect if it is missing.
 
 ```bash
 python backend/db/local_postgres.py ensure

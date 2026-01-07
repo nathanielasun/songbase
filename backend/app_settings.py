@@ -24,12 +24,15 @@ def _default_settings() -> dict[str, Any]:
             "hash_workers": 2,
             "embed_workers": 1,
             "verify": True,
-            "images": False,
+            "images": True,
         },
         "paths": {
             "preprocessed_cache_dir": str(acquisition_config.PREPROCESSED_CACHE_DIR),
             "song_cache_dir": str(acquisition_config.REPO_ROOT / ".song_cache"),
             "metadata_dir": str(DEFAULT_METADATA_DIR),
+        },
+        "sources": {
+            "last_seeded_at": None,
         },
     }
 

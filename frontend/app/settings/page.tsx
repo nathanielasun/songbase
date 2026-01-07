@@ -45,7 +45,7 @@ const emptyForm: FormState = {
   hashWorkers: '',
   embedWorkers: '',
   verify: true,
-  images: false,
+  images: true,
   preprocessedCacheDir: '',
   metadataDir: '',
   songCacheDir: '',

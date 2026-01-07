@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib
 import os
 import subprocess
 import sys
@@ -12,6 +13,19 @@ DEFAULT_REQUIREMENTS = REPO_ROOT / "backend" / "api" / "requirements.txt"
 METADATA_ROOT = Path(os.environ.get("SONGBASE_METADATA_DIR", REPO_ROOT / ".metadata"))
 PIP_CACHE_DIR = METADATA_ROOT / "pip-cache"
 MARKER_PATH = METADATA_ROOT / ".python_deps_ready"
+
+REQUIRED_MODULES = (
+    "fastapi",
+    "uvicorn",
+    "psycopg",
+    "pgvector",
+    "musicbrainzngs",
+    "yt_dlp",
+    "numpy",
+    "mutagen",
+    "resampy",
+    "tensorflow",
+)
 
 
 def _requirements_hash(path: Path) -> str | None:
@@ -39,6 +53,15 @@ def _marker_matches(requirements_hash: str, python_tag: str) -> bool:
     )
 
 
+def _modules_ready() -> bool:
+    for module_name in REQUIRED_MODULES:
+        try:
+            importlib.import_module(module_name)
+        except ImportError:
+            return False
+    return True
+
+
 def _resolve_wheelhouse() -> Path | None:
     override = os.environ.get("SONGBASE_WHEELHOUSE_DIR")
     if override:
@@ -60,7 +83,11 @@ def ensure_python_deps(
         return
 
     python_tag = _python_tag()
-    if not force and _marker_matches(requirements_hash, python_tag):
+    if (
+        not force
+        and _marker_matches(requirements_hash, python_tag)
+        and _modules_ready()
+    ):
         return
 
     METADATA_ROOT.mkdir(parents=True, exist_ok=True)

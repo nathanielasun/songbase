@@ -27,14 +27,17 @@ app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
 @app.on_event("startup")
 async def ensure_runtime_dependencies() -> None:
-    if not os.environ.get("SONGBASE_DATABASE_URL") or not os.environ.get(
-        "SONGBASE_IMAGE_DATABASE_URL"
+    metadata_url = os.environ.get("SONGBASE_DATABASE_URL")
+    image_url = os.environ.get("SONGBASE_IMAGE_DATABASE_URL")
+    if (
+        not metadata_url
+        or not image_url
+        or local_postgres.is_local_url(metadata_url)
+        or local_postgres.is_local_url(image_url)
     ):
         local_postgres.ensure_cluster()
-        os.environ.setdefault("SONGBASE_DATABASE_URL", local_postgres.metadata_url())
-        os.environ.setdefault(
-            "SONGBASE_IMAGE_DATABASE_URL", local_postgres.image_url()
-        )
+        os.environ["SONGBASE_DATABASE_URL"] = local_postgres.metadata_url()
+        os.environ["SONGBASE_IMAGE_DATABASE_URL"] = local_postgres.image_url()
     dependencies.ensure_first_run_dependencies()
 
 @app.get("/")

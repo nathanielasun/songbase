@@ -14,6 +14,7 @@ from backend import app_settings
 from backend.db.connection import get_connection
 from backend.db.ingest import collect_mp3_files, ingest_paths
 from backend.processing import orchestrator
+from backend.processing.acquisition_pipeline import config as acquisition_config
 from backend.processing.acquisition_pipeline import sources as acquisition_sources
 from backend.processing.audio_pipeline import config as vggish_config
 
@@ -60,6 +61,14 @@ class PipelineRunRequest(BaseModel):
     image_limit_songs: int | None = None
     image_limit_artists: int | None = None
     image_rate_limit: float | None = None
+    sources_file: str | None = None
+
+
+class SeedSourcesRequest(BaseModel):
+    sources_file: str | None = None
+
+
+class ClearSourcesRequest(BaseModel):
     sources_file: str | None = None
 
 
@@ -133,6 +142,49 @@ def _tail_state(path: Path, limit: int) -> list[dict[str, Any]]:
             if isinstance(payload, dict):
                 entries.append(payload)
     return list(entries)
+
+
+def _source_key(title: str, artist: str | None) -> tuple[str, str]:
+    return (title.strip().lower(), (artist or "").strip().lower())
+
+
+def _queue_status_lookup(
+    items: list[acquisition_sources.SourceItem],
+) -> tuple[dict[tuple[str, str], str], bool]:
+    if not items:
+        return {}, True
+    title_set = {item.title.strip().lower() for item in items if item.title}
+    if not title_set:
+        return {}, True
+
+    query = """
+        SELECT title, artist, status
+        FROM metadata.download_queue
+        WHERE LOWER(title) = ANY(%s)
+    """
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(query, (sorted(title_set),))
+                rows = cur.fetchall()
+    except Exception:
+        return {}, False
+
+    status_map: dict[tuple[str, str], str] = {}
+    for title, artist, status in rows:
+        key = _source_key(title, artist)
+        status_map[key] = status
+    return status_map, True
+
+
+def _last_seeded_at() -> str | None:
+    settings = app_settings.load_settings()
+    sources = settings.get("sources")
+    if isinstance(sources, dict):
+        value = sources.get("last_seeded_at")
+        if isinstance(value, str):
+            return value
+    return None
 
 
 @router.post("/ingest")
@@ -315,6 +367,17 @@ async def queue_songs(payload: QueueInsertRequest) -> dict[str, Any]:
     }
 
 
+@router.post("/queue/clear")
+async def clear_queue() -> dict[str, Any]:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM metadata.download_queue")
+            cleared = cur.fetchone()[0]
+            cur.execute("DELETE FROM metadata.download_queue")
+        conn.commit()
+    return {"cleared": cleared}
+
+
 @router.get("/queue")
 async def list_queue(
     status: str | None = None,
@@ -389,6 +452,82 @@ async def list_queue(
         }
         for row in rows
     ]
+
+
+@router.get("/sources")
+async def list_sources(limit: int = 200, offset: int = 0) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    sources_path = acquisition_config.SOURCES_PATH
+    items = acquisition_sources.load_sources_file(sources_path)
+    total = len(items)
+    sliced = items[offset : offset + limit]
+
+    status_map, queue_available = _queue_status_lookup(sliced)
+    payload = []
+    for item in sliced:
+        status = status_map.get(_source_key(item.title, item.artist))
+        payload.append(
+            {
+                "title": item.title,
+                "artist": item.artist,
+                "album": item.album,
+                "genre": item.genre,
+                "search_query": item.search_query,
+                "source_url": item.source_url,
+                "queued": status is not None if queue_available else None,
+                "queue_status": status,
+            }
+        )
+
+    return {
+        "items": payload,
+        "total": total,
+        "path": str(sources_path),
+        "queue_available": queue_available,
+        "last_seeded_at": _last_seeded_at(),
+    }
+
+
+@router.post("/seed-sources")
+async def seed_sources(payload: SeedSourcesRequest) -> dict[str, Any]:
+    sources_path = (
+        Path(payload.sources_file).expanduser().resolve()
+        if payload.sources_file
+        else acquisition_config.SOURCES_PATH
+    )
+    if not sources_path.exists():
+        raise HTTPException(status_code=400, detail="sources.jsonl not found.")
+
+    items = acquisition_sources.load_sources_file(sources_path)
+    inserted = acquisition_sources.insert_sources(items)
+    app_settings.update_settings({"sources": {"last_seeded_at": _utc_now()}})
+
+    return {
+        "inserted": inserted,
+        "total": len(items),
+        "path": str(sources_path),
+        "last_seeded_at": _last_seeded_at(),
+    }
+
+
+@router.post("/sources/clear")
+async def clear_sources(payload: ClearSourcesRequest) -> dict[str, Any]:
+    sources_path = (
+        Path(payload.sources_file).expanduser().resolve()
+        if payload.sources_file
+        else acquisition_config.SOURCES_PATH
+    )
+    cleared = acquisition_sources.clear_sources_file(sources_path)
+    app_settings.update_settings({"sources": {"last_seeded_at": None}})
+    return {
+        "cleared": cleared,
+        "path": str(sources_path),
+        "last_seeded_at": _last_seeded_at(),
+    }
 
 
 @router.get("/stats")

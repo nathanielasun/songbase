@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -98,6 +99,23 @@ def image_url() -> str:
     return _image_url()
 
 
+def is_local_url(url: str | None) -> bool:
+    if not url:
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    if parsed.scheme not in {"postgres", "postgresql"}:
+        return False
+    query = parse_qs(parsed.query)
+    host_values = query.get("host", [])
+    if not host_values:
+        return False
+    host = Path(host_values[0]).expanduser()
+    return host.resolve() == _run_dir().resolve()
+
+
 def _require_tool(name: str) -> str:
     bundle_dir = _postgres_bin_dir()
     if bundle_dir:
@@ -116,7 +134,9 @@ def _require_tool(name: str) -> str:
                 if candidate.is_file() and os.access(candidate, os.X_OK):
                     return str(candidate)
         raise RuntimeError(
-            f"Missing '{name}'. Install Postgres and ensure '{name}' is on PATH."
+            f"Missing '{name}'. Install Postgres (with pgvector) and ensure '{name}' "
+            "is on PATH, set POSTGRES_BIN_DIR, or configure a bundle via "
+            "POSTGRES_BUNDLE_URL/POSTGRES_BUNDLE_MANIFEST."
         )
     return resolved
 
@@ -131,7 +151,82 @@ def _postgres_bin_dir() -> Path | None:
     candidate = processing_deps.postgres_bin_dir()
     if candidate.exists():
         return candidate
+
+    pg_config_dir = _pg_config_bin_dir()
+    if pg_config_dir and _bin_has_tool(pg_config_dir, "pg_ctl"):
+        return pg_config_dir
+
+    for candidate in _candidate_postgres_bin_dirs():
+        if _bin_has_tool(candidate, "pg_ctl"):
+            return candidate
     return None
+
+
+def _bin_has_tool(path: Path, name: str) -> bool:
+    if not path.is_dir():
+        return False
+    tool_name = f"{name}.exe" if sys.platform == "win32" else name
+    candidate = path / tool_name
+    return candidate.is_file() and os.access(candidate, os.X_OK)
+
+
+def _pg_config_bin_dir() -> Path | None:
+    pg_config = shutil.which("pg_config")
+    if not pg_config:
+        return None
+    result = subprocess.run(
+        [pg_config, "--bindir"],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        return None
+    value = result.stdout.strip()
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if path.is_dir():
+        return path
+    return None
+
+
+def _candidate_postgres_bin_dirs() -> list[Path]:
+    system = sys.platform
+    candidates: list[Path] = []
+    if system == "darwin":
+        prefixes = [Path("/opt/homebrew/opt"), Path("/usr/local/opt")]
+        versions = [
+            "postgresql@18",
+            "postgresql@17",
+            "postgresql@16",
+            "postgresql@15",
+            "postgresql@14",
+            "postgresql@13",
+            "postgresql",
+        ]
+        for prefix in prefixes:
+            for version in versions:
+                candidates.append(prefix / version / "bin")
+
+        app_root = Path("/Applications/Postgres.app/Contents/Versions")
+        if app_root.exists():
+            for entry in sorted(app_root.iterdir(), reverse=True):
+                candidates.append(entry / "bin")
+            candidates.append(app_root / "latest" / "bin")
+    elif system.startswith("linux"):
+        for version in ["16", "15", "14", "13", "12"]:
+            candidates.append(Path(f"/usr/lib/postgresql/{version}/bin"))
+            candidates.append(Path(f"/usr/pgsql-{version}/bin"))
+    elif system in {"win32", "cygwin"}:
+        program_files = os.environ.get("ProgramFiles", "C:\\Program Files")
+        for version in ["16", "15", "14", "13", "12"]:
+            candidates.append(Path(program_files) / "PostgreSQL" / version / "bin")
+    asdf_root = Path.home() / ".asdf" / "installs" / "postgres"
+    if asdf_root.exists():
+        for entry in sorted(asdf_root.iterdir(), reverse=True):
+            candidates.append(entry / "bin")
+    return candidates
 
 
 def _run(cmd: list[str], env: dict | None = None, check: bool = True) -> subprocess.CompletedProcess:
@@ -209,6 +304,8 @@ def _db_exists(psql: str, db_name: str) -> bool:
             str(_port()),
             "-U",
             _local_user(),
+            "-d",
+            "postgres",
             "-tAc",
             f"SELECT 1 FROM pg_database WHERE datname = '{db_name}'",
         ],
@@ -222,7 +319,7 @@ def _db_exists(psql: str, db_name: str) -> bool:
 def _ensure_database(createdb: str, psql: str, db_name: str) -> None:
     if _db_exists(psql, db_name):
         return
-    _run(
+    result = subprocess.run(
         [
             createdb,
             "-h",
@@ -232,7 +329,21 @@ def _ensure_database(createdb: str, psql: str, db_name: str) -> None:
             "-U",
             _local_user(),
             db_name,
-        ]
+        ],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+    if result.returncode == 0:
+        return
+    stderr = (result.stderr or "").lower()
+    if "already exists" in stderr:
+        return
+    raise subprocess.CalledProcessError(
+        result.returncode,
+        result.args,
+        output=result.stdout,
+        stderr=result.stderr,
     )
 
 

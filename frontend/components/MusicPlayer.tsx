@@ -65,6 +65,12 @@ export default function MusicPlayer({
     onSongEndRef.current = onSongEnd;
   }, [onSongEnd]);
 
+  // Reset time only when song changes, not when paused
+  useEffect(() => {
+    setCurrentTime(0);
+  }, [currentSong?.id]);
+
+  // Handle playback timer
   useEffect(() => {
     if (isPlaying && currentSong) {
       const interval = setInterval(() => {
@@ -79,8 +85,6 @@ export default function MusicPlayer({
         });
       }, 1000);
       return () => clearInterval(interval);
-    } else {
-      setCurrentTime(0);
     }
   }, [isPlaying, currentSong, duration]);
 
@@ -280,7 +284,8 @@ export default function MusicPlayer({
           max="100"
           value={isMuted ? 0 : volume}
           onChange={handleVolumeChange}
-          className="w-24 h-1 bg-gray-700 rounded-lg appearance-none cursor-pointer volume-slider"
+          className="w-20 volume-slider"
+          style={{ '--volume-width': `${isMuted ? 0 : volume}%` } as React.CSSProperties}
         />
       </div>
     </div>

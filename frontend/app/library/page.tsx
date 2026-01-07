@@ -52,6 +52,25 @@ type PipelineStatus = {
   events?: Record<string, unknown>[];
 };
 
+type SourceItem = {
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+  genre?: string | null;
+  search_query?: string | null;
+  source_url?: string | null;
+  queued?: boolean | null;
+  queue_status?: string | null;
+};
+
+type SourceResponse = {
+  items: SourceItem[];
+  total: number;
+  path: string;
+  queue_available: boolean;
+  last_seeded_at?: string | null;
+};
+
 type PipelineForm = {
   downloadLimit: string;
   processLimit: string;
@@ -104,6 +123,8 @@ const emptyStats: LibraryStats = {
 export default function LibraryPage() {
   const [activeTab, setActiveTab] = useState<TabId>('manage');
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
+  const [sourceItems, setSourceItems] = useState<SourceItem[]>([]);
+  const [sourceMeta, setSourceMeta] = useState<SourceResponse | null>(null);
   const [stats, setStats] = useState<LibraryStats>(emptyStats);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>({
     running: false,
@@ -133,6 +154,19 @@ export default function LibraryPage() {
     const downloading = queueCounts.downloading ?? 0;
     return { total, pending, downloading };
   }, [stats.queue]);
+
+  const visibleSourceItems = useMemo(() => {
+    if (!sourceMeta?.queue_available) {
+      return sourceItems;
+    }
+    return sourceItems.filter((item) => !(item.queued || item.queue_status));
+  }, [sourceItems, sourceMeta?.queue_available]);
+
+  const sourceTotal = sourceMeta?.total ?? sourceItems.length;
+  const sourceRemaining = visibleSourceItems.length;
+  const sourceQueued = sourceMeta?.queue_available
+    ? Math.max(0, sourceTotal - sourceRemaining)
+    : 0;
 
   const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, {
@@ -195,11 +229,23 @@ export default function LibraryPage() {
     }
   }, []);
 
+  const refreshSources = useCallback(async () => {
+    try {
+      const data = await fetchJson<SourceResponse>('/api/library/sources?limit=200');
+      setSourceItems(data.items);
+      setSourceMeta(data);
+      setActionError(null);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to load sources.');
+    }
+  }, []);
+
   useEffect(() => {
     refreshStats();
     refreshQueue();
     refreshPipeline();
     refreshSettings();
+    refreshSources();
   }, [refreshQueue, refreshPipeline, refreshSettings, refreshStats]);
 
   useEffect(() => {
@@ -207,9 +253,10 @@ export default function LibraryPage() {
     const interval = window.setInterval(() => {
       refreshQueue();
       refreshPipeline();
+      refreshSources();
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [activeTab, refreshPipeline, refreshQueue]);
+  }, [activeTab, refreshPipeline, refreshQueue, refreshSources]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
@@ -340,6 +387,114 @@ export default function LibraryPage() {
       refreshQueue();
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to start pipeline.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleSeedSources = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    setBusy(true);
+    try {
+      const result = await fetchJson<{ inserted: number; total: number; last_seeded_at?: string | null }>(
+        '/api/library/seed-sources',
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }
+      );
+      setActionMessage(
+        `Seeded ${result.inserted} of ${result.total} sources into the queue.`
+      );
+      setSourceMeta((prev) =>
+        prev
+          ? {
+              ...prev,
+              last_seeded_at: result.last_seeded_at ?? prev.last_seeded_at,
+            }
+          : prev
+      );
+      refreshQueue();
+      refreshSources();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to seed sources.jsonl.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearSources = async () => {
+    const total = sourceMeta?.total ?? sourceItems.length;
+    if (
+      !window.confirm(
+        `Clear ${total} sources from sources.jsonl? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setActionMessage(null);
+    setActionError(null);
+    setBusy(true);
+    try {
+      const result = await fetchJson<{ cleared: number; last_seeded_at?: string | null }>(
+        '/api/library/sources/clear',
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }
+      );
+      setActionMessage(`Cleared ${result.cleared} sources.jsonl entries.`);
+      setSourceMeta((prev) =>
+        prev
+          ? {
+              ...prev,
+              total: 0,
+              last_seeded_at: result.last_seeded_at ?? prev.last_seeded_at,
+            }
+          : prev
+      );
+      setSourceItems([]);
+      refreshSources();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to clear sources.jsonl.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleClearQueue = async () => {
+    const total = queueSummary.total;
+    if (
+      !window.confirm(
+        `Clear ${total} queued item(s) from the pipeline queue? This cannot be undone.`
+      )
+    ) {
+      return;
+    }
+    setActionMessage(null);
+    setActionError(null);
+    setBusy(true);
+    try {
+      const result = await fetchJson<{ cleared: number }>(
+        '/api/library/queue/clear',
+        {
+          method: 'POST',
+          body: JSON.stringify({}),
+        }
+      );
+      setActionMessage(`Cleared ${result.cleared} queued item(s).`);
+      refreshQueue();
+      refreshStats();
+      refreshSources();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to clear the pipeline queue.'
+      );
     } finally {
       setBusy(false);
     }
@@ -515,6 +670,120 @@ export default function LibraryPage() {
             {activeTab === 'downloads' && (
               <div className="space-y-6">
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <QueueListIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Sources.jsonl</h2>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
+                      <span>{sourceMeta?.path ?? 'backend/processing/acquisition_pipeline/sources.jsonl'}</span>
+                      {sourceMeta?.queue_available ? (
+                        <>
+                          <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
+                            {sourceRemaining} remaining
+                          </span>
+                          {sourceQueued > 0 && (
+                            <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
+                              {sourceQueued} in pipeline
+                            </span>
+                          )}
+                        </>
+                      ) : (
+                        <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
+                          {sourceTotal} entries
+                        </span>
+                      )}
+                      <span className="text-gray-500">
+                        Last seeded:{' '}
+                        {sourceMeta?.last_seeded_at
+                          ? new Date(sourceMeta.last_seeded_at).toLocaleString()
+                          : '--'}
+                      </span>
+                      <button
+                        onClick={handleSeedSources}
+                        disabled={busy || sourceMeta?.queue_available === false}
+                        className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        Seed into queue
+                      </button>
+                      <button
+                        onClick={handleClearSources}
+                        disabled={busy}
+                        className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                      >
+                        Clear sources
+                      </button>
+                    </div>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Items listed in the local sources file that are not yet in the pipeline queue.
+                  </p>
+                  {!sourceMeta?.queue_available && (
+                    <p className="text-xs text-amber-300 mt-2">
+                      Queue status unavailable (database offline).
+                    </p>
+                  )}
+                  {sourceMeta?.queue_available && (
+                    <p className="text-xs text-gray-500 mt-2">
+                      Sources already queued appear in the pipeline list below.
+                    </p>
+                  )}
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="text-gray-400">
+                        <tr>
+                          <th className="py-2 pr-4">Title</th>
+                          <th className="py-2 pr-4">Artist</th>
+                          <th className="py-2 pr-4">Queued</th>
+                          <th className="py-2 pr-4">Status</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {visibleSourceItems.length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="py-4 text-gray-500">
+                              {sourceMeta?.queue_available
+                                ? 'All sources.jsonl entries are already in the pipeline queue.'
+                                : 'No sources.jsonl entries found.'}
+                            </td>
+                          </tr>
+                        )}
+                        {visibleSourceItems.map((item, index) => (
+                          <tr key={`${item.title}-${index}`} className="border-t border-gray-800">
+                            <td className="py-3 pr-4">
+                              <p className="font-medium">{item.title}</p>
+                              {item.album && (
+                                <p className="text-xs text-gray-500">{item.album}</p>
+                              )}
+                            </td>
+                            <td className="py-3 pr-4 text-gray-300">
+                              {item.artist || 'Unknown'}
+                            </td>
+                            <td className="py-3 pr-4 text-gray-300">
+                              {item.queued === null ? '--' : item.queued ? 'Yes' : 'No'}
+                            </td>
+                            <td className="py-3 pr-4">
+                              {item.queue_status ? (
+                                <span
+                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                                    statusStyles[item.queue_status] ||
+                                    'bg-gray-800 text-gray-200'
+                                  }`}
+                                >
+                                  {item.queue_status.replace(/_/g, ' ')}
+                                </span>
+                              ) : (
+                                <span className="text-xs text-gray-500">--</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </section>
+
+                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center justify-between flex-wrap gap-4">
                     <div className="flex items-center gap-3">
                       <PlayIcon className="h-5 w-5 text-gray-300" />
@@ -623,9 +892,18 @@ export default function LibraryPage() {
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Queue Status</h2>
+                  <div className="flex items-center justify-between flex-wrap gap-4">
+                    <div className="flex items-center gap-3">
+                      <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Queue Status</h2>
+                    </div>
+                    <button
+                      onClick={handleClearQueue}
+                      disabled={busy}
+                      className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                    >
+                      Clear pipeline queue
+                    </button>
                   </div>
                   <div className="flex flex-wrap gap-3 mt-4 text-xs font-semibold text-gray-200">
                     {Object.entries(stats.queue).length === 0 && (

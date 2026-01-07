@@ -1,0 +1,93 @@
+{"stage": "start", "ts": "2026-01-07T15:48:58.406999Z"}
+{"download_id": 2287, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/2287.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T15:49:10.765118Z"}
+{"download_id": 2287, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T15:49:11.338508Z"}
+{"download_id": 2287, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T15:49:11.343314Z"}
+{"stage": "finished", "ts": "2026-01-07T15:49:11.424546Z"}
+{"stage": "start", "ts": "2026-01-07T15:49:55.721941Z"}
+{"download_id": 2289, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/2289.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T15:50:11.953440Z"}
+{"download_id": 2290, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/2290.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T15:50:12.050286Z"}
+{"download_id": 2288, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/2288.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T15:50:12.409051Z"}
+{"download_id": 2289, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T15:50:12.633521Z"}
+{"download_id": 2290, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T15:50:12.669109Z"}
+{"download_id": 2288, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T15:50:12.863624Z"}
+{"download_id": 2290, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T15:50:12.870887Z"}
+{"download_id": 2289, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T15:50:12.876263Z"}
+{"download_id": 2288, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T15:50:12.946864Z"}
+{"stage": "finished", "ts": "2026-01-07T15:50:13.057309Z"}
+{"stage": "start", "ts": "2026-01-07T16:00:52.621567Z"}
+{"download_id": 3051, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3051.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:28.144851Z"}
+{"download_id": 3053, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3053.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:28.197594Z"}
+{"download_id": 3052, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3052.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:28.462432Z"}
+{"download_id": 3050, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3050.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:28.804064Z"}
+{"download_id": 3055, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3055.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:28.866624Z"}
+{"download_id": 3054, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3054.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:29.283157Z"}
+{"download_id": 3056, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3056.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:29.327279Z"}
+{"download_id": 3057, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3057.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:29.580282Z"}
+{"download_id": 3059, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3059.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:29.677959Z"}
+{"download_id": 3058, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3058.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:29.935980Z"}
+{"download_id": 3060, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3060.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:30.012573Z"}
+{"download_id": 3063, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3063.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:30.303774Z"}
+{"download_id": 3061, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3061.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:30.357504Z"}
+{"download_id": 3065, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3065.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:30.617907Z"}
+{"download_id": 3062, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3062.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:30.748929Z"}
+{"download_id": 3064, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3064.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.010080Z"}
+{"download_id": 3066, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3066.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.023178Z"}
+{"download_id": 3068, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3068.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.322981Z"}
+{"download_id": 3069, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3069.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.336878Z"}
+{"download_id": 3067, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3067.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.705019Z"}
+{"download_id": 3070, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3070.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:31.834527Z"}
+{"download_id": 3073, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3073.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:32.077674Z"}
+{"download_id": 3072, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3072.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:32.255693Z"}
+{"download_id": 3071, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3071.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:32.574275Z"}
+{"download_id": 3049, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/3049.wav", "stage": "pcm_raw_ready", "ts": "2026-01-07T16:02:32.590592Z"}
+{"download_id": 3059, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.632968Z"}
+{"download_id": 3072, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.685638Z"}
+{"download_id": 3056, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.739958Z"}
+{"download_id": 3067, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.752676Z"}
+{"download_id": 3070, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.760901Z"}
+{"download_id": 3073, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.769180Z"}
+{"download_id": 3055, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.778372Z"}
+{"download_id": 3069, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.787322Z"}
+{"download_id": 3053, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.792984Z"}
+{"download_id": 3052, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.798527Z"}
+{"download_id": 3063, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.806406Z"}
+{"download_id": 3058, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.811974Z"}
+{"download_id": 3068, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.816735Z"}
+{"download_id": 3050, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.823866Z"}
+{"download_id": 3051, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.829324Z"}
+{"download_id": 3061, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.837454Z"}
+{"download_id": 3054, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.842146Z"}
+{"download_id": 3064, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.846587Z"}
+{"download_id": 3065, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.851099Z"}
+{"download_id": 3057, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.856039Z"}
+{"download_id": 3062, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.861277Z"}
+{"download_id": 3066, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.867423Z"}
+{"download_id": 3060, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.872315Z"}
+{"download_id": 3049, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.877337Z"}
+{"download_id": 3071, "error": "resampy is required for resampling audio.", "stage": "hash_failed", "ts": "2026-01-07T16:02:32.882390Z"}
+{"download_id": 3064, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.887533Z"}
+{"download_id": 3052, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.892455Z"}
+{"download_id": 3055, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.899826Z"}
+{"download_id": 3060, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.905224Z"}
+{"download_id": 3073, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.910179Z"}
+{"download_id": 3063, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.916310Z"}
+{"download_id": 3056, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.923191Z"}
+{"download_id": 3065, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.927629Z"}
+{"download_id": 3057, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.932432Z"}
+{"download_id": 3058, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.936835Z"}
+{"download_id": 3062, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.943221Z"}
+{"download_id": 3069, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.947463Z"}
+{"download_id": 3068, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.951914Z"}
+{"download_id": 3054, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.956237Z"}
+{"download_id": 3050, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.960994Z"}
+{"download_id": 3071, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.965928Z"}
+{"download_id": 3070, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.970154Z"}
+{"download_id": 3051, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.974705Z"}
+{"download_id": 3061, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.980235Z"}
+{"download_id": 3059, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.985476Z"}
+{"download_id": 3067, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.990006Z"}
+{"download_id": 3053, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:32.994100Z"}
+{"download_id": 3049, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:33.000406Z"}
+{"download_id": 3066, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:33.005335Z"}
+{"download_id": 3072, "error": "resampy is required for resampling audio.", "stage": "embedding_failed", "ts": "2026-01-07T16:02:33.009403Z"}
+{"stage": "finished", "ts": "2026-01-07T16:02:33.256008Z"}

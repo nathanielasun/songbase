@@ -20,7 +20,7 @@ fi
 
 # Start backend API server
 echo "Starting FastAPI backend on http://localhost:8000"
-"${PY_RUN}" -m uvicorn backend.api.app:app --reload --port 8000 &
+"${PY_RUN}" -m backend.api.server --reload --port 8000 &
 BACKEND_PID=$!
 
 # Start frontend Next.js server

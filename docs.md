@@ -119,7 +119,8 @@ songbase/
 
 ### frontend/app/library/page.tsx
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
-- **Uses**: `/api/library/queue`, `/api/library/stats`, `/api/library/pipeline/status`
+- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`
+- **Notes**: Sources already queued are hidden from the sources list and shown only in the pipeline queue table.
 
 ### frontend/app/settings/page.tsx
 - **Purpose**: Settings UI for batch sizes and storage paths.
@@ -191,6 +192,10 @@ try {
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
   - `POST /api/library/queue`: Queue songs for acquisition (accepts a list of titles)
   - `GET /api/library/queue`: View download queue status
+  - `POST /api/library/queue/clear`: Clear the download queue
+  - `GET /api/library/sources`: List entries in `sources.jsonl`
+  - `POST /api/library/seed-sources`: Insert `sources.jsonl` into the queue
+  - `POST /api/library/sources/clear`: Clear `sources.jsonl` entries
   - `GET /api/library/stats`: Database + queue metrics
   - `POST /api/library/pipeline/run`: Start a processing pipeline run
   - `GET /api/library/pipeline/status`: Fetch pipeline status + recent events
@@ -223,6 +228,10 @@ try {
 
 ## Backend DB (Postgres + pgvector)
 
+### backend/db/connection.py
+- **Purpose**: Connection helper for metadata DB; auto-creates the `vector` extension if missing.
+- **Used By**: API routes, migrations, ingestion, pipeline runners.
+
 ### backend/db/migrate.py
 - **Purpose**: Apply schema migrations in `backend/db/migrations`
 - **Requires**: `SONGBASE_DATABASE_URL` set to a Postgres connection string
@@ -233,7 +242,7 @@ try {
 
 ### backend/db/local_postgres.py
 - **Purpose**: Initialize and start a local Postgres cluster under `.metadata/` and create both databases.
-- **Requires**: `initdb`, `pg_ctl`, `psql`, `createdb` on PATH, plus the pgvector extension installed.
+- **Requires**: `initdb`, `pg_ctl`, `psql`, `createdb` on PATH, plus the pgvector extension installed. The bootstrap auto-detects `pg_config`, Homebrew/Postgres.app, and asdf installs; set `POSTGRES_BIN_DIR` if detection fails.
 - **Usage**:
   ```bash
   python backend/db/local_postgres.py ensure
@@ -318,6 +327,7 @@ try {
 ### backend/processing/audio_pipeline/cli.py
 - **Purpose**: Tokenize PCM WAV files into VGGish embeddings
 - **Requires**: VGGish files, TensorFlow, NumPy, VGGish checkpoint + PCA params, resampy for non-16k input
+- **Note**: TensorFlow and resampy install via `backend/api/requirements.txt` when bootstrapping.
 - **Usage**:
   ```bash
   python backend/processing/audio_pipeline/cli.py /path/to/wavs /path/to/tokens
@@ -471,6 +481,13 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
   - Next.js frontend on http://localhost:3000
 - **Features**: Automatic cleanup on Ctrl+C
  - **Notes**: Uses the local Python wrapper to create a `.venv`, install dependencies, and bootstrap local Postgres when database URLs are missing.
+
+### backend/api/server.py
+- **Purpose**: Bootstrap dependencies, ensure local Postgres, and start the FastAPI server.
+- **Usage**:
+  ```bash
+  ./scripts/use_local_python.sh -m backend.api.server --reload --port 8000
+  ```
 
 ## API Development
 
