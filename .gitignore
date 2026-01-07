@@ -10,13 +10,9 @@
 /preprocessed_cache/*
 !/.preprocessed_cache/.gitkeep
 !/preprocessed_cache/pipeline_state.jsonl
-/preprocessed_cache/pcm_raw/*
 !/preprocessed_cache/pcm_raw/.gitkeep
-/preprocessed_cache/pcm_norm/*
 !/preprocessed_cache/pcm_norm/.gitkeep
-/preprocessed_cache/embeddings/*
 !/preprocessed_cache/embeddings/.gitkeep
-/preprocessed_cache/song_cache/*
 !/preprocessed_cache/song_cache/.gitkeep
 
 #agent files
