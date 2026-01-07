@@ -34,8 +34,10 @@ def download_pending(
     workers: int | None = None,
     sources_file: Path | None = None,
     output_dir: Path | None = None,
+    seed_sources: bool = True,
 ) -> dict[str, int]:
-    ensure_sources(sources_file)
+    if seed_sources:
+        ensure_sources(sources_file)
 
     items = fetch_pending(limit)
     if not items:

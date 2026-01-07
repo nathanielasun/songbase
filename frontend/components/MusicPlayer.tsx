@@ -53,11 +53,14 @@ export default function MusicPlayer({
   onSongEnd,
 }: MusicPlayerProps) {
   const [currentTime, setCurrentTime] = useState(0);
+  const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(70);
   const [isMuted, setIsMuted] = useState(false);
+  const [isBuffering, setIsBuffering] = useState(false);
+  const audioRef = useRef<HTMLAudioElement>(null);
   const onSongEndRef = useRef(onSongEnd);
+  const isPlayingRef = useRef(isPlaying);
 
-  const duration = currentSong?.duration || 0;
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   // Keep the ref updated with the latest callback
@@ -65,33 +68,177 @@ export default function MusicPlayer({
     onSongEndRef.current = onSongEnd;
   }, [onSongEnd]);
 
-  // Reset time only when song changes, not when paused
   useEffect(() => {
-    setCurrentTime(0);
-  }, [currentSong?.id]);
+    isPlayingRef.current = isPlaying;
+  }, [isPlaying]);
 
-  // Handle playback timer
+  // Load audio source when song changes
   useEffect(() => {
-    if (isPlaying && currentSong) {
-      const interval = setInterval(() => {
-        setCurrentTime((prev) => {
-          if (prev >= duration - 1) {
-            if (onSongEndRef.current) {
-              onSongEndRef.current();
-            }
-            return 0;
-          }
-          return prev + 1;
+    if (!audioRef.current || !currentSong) return;
+
+    const audio = audioRef.current;
+    const streamUrl = `/api/library/stream/${currentSong.hashId}`;
+
+    console.log('Loading audio:', streamUrl);
+
+    audio.pause();
+    audio.src = streamUrl;
+    audio.load();
+    setCurrentTime(0);
+    setDuration(0);
+    setIsBuffering(true);
+
+    // Set up one-time listener for when metadata is loaded
+    const handleLoadedMetadata = () => {
+      console.log('Audio metadata loaded, duration:', audio.duration);
+      setDuration(audio.duration || 0);
+      setIsBuffering(false);
+
+      if (isPlayingRef.current) {
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((error) => {
+            console.error('Playback failed:', error);
+            setIsBuffering(false);
+          });
+        }
+      }
+    };
+
+    audio.addEventListener('loadedmetadata', handleLoadedMetadata, { once: true });
+
+    return () => {
+      audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
+    };
+  }, [currentSong?.hashId]);
+
+  // Handle play/pause
+  useEffect(() => {
+    if (!audioRef.current) return;
+
+    const audio = audioRef.current;
+
+    if (isPlaying) {
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((error) => {
+          console.error('Playback failed:', error);
         });
-      }, 1000);
-      return () => clearInterval(interval);
+      }
+    } else {
+      audio.pause();
     }
-  }, [isPlaying, currentSong, duration]);
+  }, [isPlaying]);
+
+  // Handle volume and mute
+  useEffect(() => {
+    if (!audioRef.current) return;
+    audioRef.current.volume = isMuted ? 0 : volume / 100;
+  }, [volume, isMuted]);
+
+  // Set up audio event listeners
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    const handleTimeUpdate = () => {
+      setCurrentTime(audio.currentTime);
+    };
+
+    const handleDurationChange = () => {
+      const newDuration = audio.duration || 0;
+      console.log('Duration changed:', newDuration);
+      setDuration(newDuration);
+    };
+
+    const handlePlaying = () => {
+      console.log('Audio is playing');
+      setIsBuffering(false);
+    };
+
+    const handleEnded = () => {
+      console.log('Audio ended');
+      if (repeatMode === 'once') {
+        audio.currentTime = 0;
+        audio.play();
+      } else if (onSongEndRef.current) {
+        onSongEndRef.current();
+      }
+    };
+
+    const handleCanPlay = () => {
+      console.log('Audio can play');
+      setIsBuffering(false);
+    };
+
+    const handleWaiting = () => {
+      console.log('Audio waiting/buffering');
+      setIsBuffering(true);
+    };
+
+    const handlePause = () => {
+      console.log('Audio paused');
+    };
+
+    const handleSeeking = () => {
+      console.log('Audio seeking');
+      setIsBuffering(true);
+    };
+
+    const handleSeeked = () => {
+      console.log('Audio seeked');
+      setIsBuffering(false);
+    };
+
+    const handleError = (e: Event) => {
+      console.error('Audio error:', e);
+      const audioElement = e.target as HTMLAudioElement;
+      if (audioElement.error) {
+        console.error('Error code:', audioElement.error.code);
+        console.error('Error message:', audioElement.error.message);
+      }
+      setIsBuffering(false);
+    };
+
+    audio.addEventListener('timeupdate', handleTimeUpdate);
+    audio.addEventListener('durationchange', handleDurationChange);
+    audio.addEventListener('playing', handlePlaying);
+    audio.addEventListener('ended', handleEnded);
+    audio.addEventListener('canplay', handleCanPlay);
+    audio.addEventListener('waiting', handleWaiting);
+    audio.addEventListener('pause', handlePause);
+    audio.addEventListener('seeking', handleSeeking);
+    audio.addEventListener('seeked', handleSeeked);
+    audio.addEventListener('error', handleError);
+
+    return () => {
+      audio.removeEventListener('timeupdate', handleTimeUpdate);
+      audio.removeEventListener('durationchange', handleDurationChange);
+      audio.removeEventListener('playing', handlePlaying);
+      audio.removeEventListener('ended', handleEnded);
+      audio.removeEventListener('canplay', handleCanPlay);
+      audio.removeEventListener('waiting', handleWaiting);
+      audio.removeEventListener('pause', handlePause);
+      audio.removeEventListener('seeking', handleSeeking);
+      audio.removeEventListener('seeked', handleSeeked);
+      audio.removeEventListener('error', handleError);
+    };
+  }, [repeatMode]);
 
   const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (!currentSong) return;
-    const newTime = parseInt(e.target.value);
-    setCurrentTime(newTime);
+    if (!currentSong || !audioRef.current) return;
+
+    const audio = audioRef.current;
+    const newTime = parseFloat(e.target.value);
+
+    // Only allow seeking if audio is ready
+    if (audio.readyState >= 2) { // HAVE_CURRENT_DATA or greater
+      console.log('Seeking to:', newTime);
+      audio.currentTime = newTime;
+      setCurrentTime(newTime);
+    } else {
+      console.warn('Audio not ready for seeking, readyState:', audio.readyState);
+    }
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -130,7 +277,11 @@ export default function MusicPlayer({
   const isDisliked = currentSong.disliked || false;
 
   return (
-    <div className="h-24 bg-gray-900 border-t border-gray-800 px-4 flex items-center justify-between">
+    <>
+      {/* Hidden audio element for actual playback */}
+      <audio ref={audioRef} preload="auto" />
+
+      <div className="h-24 bg-gray-900 border-t border-gray-800 px-4 flex items-center justify-between">
       {/* Song Info with Like/Dislike */}
       <div className="flex items-center gap-4 w-1/4">
         {currentSong.albumArt && (
@@ -205,9 +356,12 @@ export default function MusicPlayer({
           {/* Play/Pause Button */}
           <button
             onClick={onPlayPause}
-            className="bg-white text-black rounded-full p-2 hover:scale-105 transition-transform"
+            disabled={isBuffering}
+            className="bg-white text-black rounded-full p-2 hover:scale-105 transition-transform disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {isPlaying ? (
+            {isBuffering ? (
+              <div className="w-5 h-5 border-2 border-black border-t-transparent rounded-full animate-spin" />
+            ) : isPlaying ? (
               <PauseIcon className="w-5 h-5" />
             ) : (
               <PlayIcon className="w-5 h-5" />
@@ -257,14 +411,15 @@ export default function MusicPlayer({
           <input
             type="range"
             min="0"
-            max={duration}
-            value={Math.floor(currentTime)}
+            max={duration || 0}
+            value={currentTime}
             onChange={handleProgressChange}
-            className="flex-1 progress-slider"
+            disabled={duration === 0}
+            className="flex-1 progress-slider disabled:opacity-50 disabled:cursor-not-allowed"
             style={{ '--progress-width': `${progress}%` } as React.CSSProperties}
           />
           <span className="text-xs text-gray-400 w-10">
-            {formatDuration(duration)}
+            {formatDuration(Math.floor(duration))}
           </span>
         </div>
       </div>
@@ -289,5 +444,6 @@ export default function MusicPlayer({
         />
       </div>
     </div>
+    </>
   );
 }

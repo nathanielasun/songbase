@@ -91,6 +91,52 @@ type SettingsSnapshot = {
   };
 };
 
+type MetadataTaskState = {
+  running: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_error?: string | null;
+  last_result?: Record<string, unknown> | null;
+  last_config?: Record<string, unknown> | null;
+};
+
+type MetadataStatus = {
+  verification: MetadataTaskState;
+  images: MetadataTaskState;
+};
+
+type UnlinkedSong = {
+  sha_id: string;
+  title: string;
+  artist?: string | null;
+  album?: string | null;
+};
+
+type UnlinkedResponse = {
+  items: UnlinkedSong[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
+type AlbumCatalogItem = {
+  album_id: string;
+  title: string;
+  artist_name?: string | null;
+  artist_id?: number | null;
+  release_year?: number | null;
+  track_count?: number | null;
+  song_count?: number | null;
+};
+
+type AlbumCatalogResponse = {
+  items: AlbumCatalogItem[];
+  total: number;
+  limit: number;
+  offset: number;
+  query?: string | null;
+};
+
 const statusStyles: Record<string, string> = {
   pending: 'bg-gray-700 text-gray-200',
   downloading: 'bg-blue-600 text-white',
@@ -127,7 +173,22 @@ export default function LibraryPage() {
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>({
     running: false,
   });
+  const [metadataStatus, setMetadataStatus] = useState<MetadataStatus>({
+    verification: { running: false },
+    images: { running: false },
+  });
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
+  const [queuePage, setQueuePage] = useState(1);
+  const [queuePageSize, setQueuePageSize] = useState(25);
+  const [unlinkedSongs, setUnlinkedSongs] = useState<UnlinkedSong[]>([]);
+  const [unlinkedTotal, setUnlinkedTotal] = useState(0);
+  const [albumCatalog, setAlbumCatalog] = useState<AlbumCatalogItem[]>([]);
+  const [albumSearch, setAlbumSearch] = useState('');
+  const [selectedAlbumId, setSelectedAlbumId] = useState('');
+  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
+  const [linkBusy, setLinkBusy] = useState(false);
+  const [linkMessage, setLinkMessage] = useState<string | null>(null);
+  const [linkError, setLinkError] = useState<string | null>(null);
 
   const [searchTitle, setSearchTitle] = useState('');
   const [searchArtist, setSearchArtist] = useState('');
@@ -137,12 +198,25 @@ export default function LibraryPage() {
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [metadataBusy, setMetadataBusy] = useState(false);
   const [pipelineForm, setPipelineForm] = useState<PipelineForm>({
     downloadLimit: '8',
     processLimit: '8',
     download: true,
     verify: true,
     images: true,
+  });
+  const [verifyForm, setVerifyForm] = useState({
+    limit: '',
+    minScore: '',
+    rateLimit: '',
+    dryRun: false,
+  });
+  const [imageForm, setImageForm] = useState({
+    limitSongs: '',
+    limitArtists: '',
+    rateLimit: '',
+    dryRun: false,
   });
 
   const queueSummary = useMemo(() => {
@@ -152,6 +226,32 @@ export default function LibraryPage() {
     const downloading = queueCounts.downloading ?? 0;
     return { total, pending, downloading };
   }, [stats.queue]);
+
+  const queueTotal = queueSummary.total || queueItems.length;
+
+  const queuePageCount = useMemo(() => {
+    if (!queueTotal) {
+      return 1;
+    }
+    return Math.max(1, Math.ceil(queueTotal / queuePageSize));
+  }, [queuePageSize, queueTotal]);
+
+  const queueOffset = (queuePage - 1) * queuePageSize;
+
+  const lastEvent = useMemo(() => {
+    const events = pipelineStatus.events ?? [];
+    return events.length ? events[events.length - 1] : null;
+  }, [pipelineStatus.events]);
+
+  const pipelineConfig = useMemo(() => {
+    const config = pipelineStatus.last_config?.config;
+    return (config as Record<string, unknown>) || {};
+  }, [pipelineStatus.last_config]);
+
+  const pipelinePaths = useMemo(() => {
+    const paths = pipelineStatus.last_config?.paths;
+    return (paths as Record<string, unknown>) || {};
+  }, [pipelineStatus.last_config]);
 
   const visibleSourceItems = useMemo(() => {
     if (!sourceMeta?.queue_available) {
@@ -180,13 +280,15 @@ export default function LibraryPage() {
 
   const refreshQueue = useCallback(async () => {
     try {
-      const data = await fetchJson<QueueItem[]>('/api/library/queue?limit=200');
+      const data = await fetchJson<QueueItem[]>(
+        `/api/library/queue?limit=${queuePageSize}&offset=${queueOffset}`
+      );
       setQueueItems(data);
       setActionError(null);
     } catch (error) {
       setActionError(error instanceof Error ? error.message : 'Failed to load queue.');
     }
-  }, []);
+  }, [queueOffset, queuePageSize]);
 
   const refreshStats = useCallback(async () => {
     try {
@@ -238,13 +340,62 @@ export default function LibraryPage() {
     }
   }, []);
 
+  const refreshMetadataStatus = useCallback(async () => {
+    try {
+      const data = await fetchJson<MetadataStatus>('/api/library/metadata/status');
+      setMetadataStatus(data);
+      setActionError(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to load metadata status.'
+      );
+    }
+  }, []);
+
+  const refreshUnlinked = useCallback(async () => {
+    try {
+      const data = await fetchJson<UnlinkedResponse>(
+        '/api/library/songs/unlinked?limit=25&offset=0'
+      );
+      setUnlinkedSongs(data.items);
+      setUnlinkedTotal(data.total);
+      setLinkError(null);
+    } catch (error) {
+      setLinkError(error instanceof Error ? error.message : 'Failed to load unlinked songs.');
+    }
+  }, []);
+
+  const refreshAlbumCatalog = useCallback(
+    async (query: string) => {
+      const params = new URLSearchParams({ limit: '20', offset: '0' });
+      if (query.trim()) {
+        params.set('q', query.trim());
+      }
+      try {
+        const data = await fetchJson<AlbumCatalogResponse>(
+          `/api/library/albums?${params.toString()}`
+        );
+        setAlbumCatalog(data.items);
+        setLinkError(null);
+      } catch (error) {
+        setLinkError(
+          error instanceof Error ? error.message : 'Failed to load album catalog.'
+        );
+      }
+    },
+    []
+  );
+
   useEffect(() => {
     refreshStats();
-    refreshQueue();
     refreshPipeline();
     refreshSettings();
     refreshSources();
-  }, [refreshQueue, refreshPipeline, refreshSettings, refreshStats]);
+  }, [refreshPipeline, refreshSettings, refreshStats, refreshSources]);
+
+  useEffect(() => {
+    refreshQueue();
+  }, [refreshQueue]);
 
   useEffect(() => {
     if (activeTab !== 'downloads') return;
@@ -252,14 +403,106 @@ export default function LibraryPage() {
       refreshQueue();
       refreshPipeline();
       refreshSources();
+      refreshStats();
     }, 5000);
     return () => window.clearInterval(interval);
-  }, [activeTab, refreshPipeline, refreshQueue, refreshSources]);
+  }, [activeTab, refreshPipeline, refreshQueue, refreshSources, refreshStats]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
     refreshStats();
-  }, [activeTab, refreshStats]);
+    refreshMetadataStatus();
+    refreshUnlinked();
+    refreshAlbumCatalog(albumSearch);
+  }, [activeTab, refreshAlbumCatalog, refreshMetadataStatus, refreshStats, refreshUnlinked]);
+
+  useEffect(() => {
+    if (activeTab !== 'stats') return;
+    const timeout = window.setTimeout(() => {
+      refreshAlbumCatalog(albumSearch);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [activeTab, albumSearch, refreshAlbumCatalog]);
+
+  useEffect(() => {
+    if (activeTab !== 'stats') return;
+    if (!metadataStatus.verification.running && !metadataStatus.images.running) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      refreshMetadataStatus();
+    }, 5000);
+    return () => window.clearInterval(interval);
+  }, [
+    activeTab,
+    metadataStatus.images.running,
+    metadataStatus.verification.running,
+    refreshMetadataStatus,
+  ]);
+
+  useEffect(() => {
+    if (queuePage > queuePageCount) {
+      setQueuePage(queuePageCount);
+    }
+  }, [queuePage, queuePageCount]);
+
+  const formatTimestamp = (value?: string | null) => {
+    if (!value) {
+      return '--';
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return value;
+    }
+    return date.toLocaleString();
+  };
+
+  const formatValue = (value: unknown) => {
+    if (value === null || value === undefined || value === '') {
+      return '--';
+    }
+    return String(value);
+  };
+
+  const formatBool = (value: unknown) => {
+    if (value === null || value === undefined) {
+      return '--';
+    }
+    return value ? 'Yes' : 'No';
+  };
+
+  const formatDuration = (ms: number | null) => {
+    if (!ms || ms < 0) {
+      return '--';
+    }
+    const totalSeconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s`;
+    }
+    return `${seconds}s`;
+  };
+
+  const parseOptionalNumber = (value: string) => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return null;
+    }
+    const parsed = Number(trimmed);
+    if (Number.isNaN(parsed)) {
+      return null;
+    }
+    return parsed;
+  };
+
+  const elapsedMs = pipelineStatus.started_at
+    ? Date.now() - new Date(pipelineStatus.started_at).getTime()
+    : null;
+  const verificationResult = metadataStatus.verification?.last_result as
+    | Record<string, unknown>
+    | null;
+  const imageResult = metadataStatus.images?.last_result as Record<string, unknown> | null;
 
   const handleQueueSingle = async () => {
     setActionMessage(null);
@@ -466,7 +709,7 @@ export default function LibraryPage() {
   };
 
   const handleClearQueue = async () => {
-    const total = queueSummary.total;
+    const total = queueTotal;
     if (
       !window.confirm(
         `Clear ${total} queued item(s) from the pipeline queue? This cannot be undone.`
@@ -498,6 +741,120 @@ export default function LibraryPage() {
     }
   };
 
+  const handleVerifyMetadata = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    const limit = parseOptionalNumber(verifyForm.limit);
+    const minScore = parseOptionalNumber(verifyForm.minScore);
+    const rateLimit = parseOptionalNumber(verifyForm.rateLimit);
+    if (
+      (verifyForm.limit.trim() && limit === null) ||
+      (verifyForm.minScore.trim() && minScore === null) ||
+      (verifyForm.rateLimit.trim() && rateLimit === null)
+    ) {
+      setActionError('Verification settings must be valid numbers.');
+      return;
+    }
+    const payload: Record<string, unknown> = {
+      dry_run: verifyForm.dryRun,
+    };
+    if (limit !== null) payload.limit = limit;
+    if (minScore !== null) payload.min_score = minScore;
+    if (rateLimit !== null) payload.rate_limit = rateLimit;
+
+    setMetadataBusy(true);
+    try {
+      await fetchJson('/api/library/metadata/verify', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setActionMessage('Metadata verification started.');
+      refreshMetadataStatus();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to start verification.'
+      );
+    } finally {
+      setMetadataBusy(false);
+    }
+  };
+
+  const handleSyncImages = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    const limitSongs = parseOptionalNumber(imageForm.limitSongs);
+    const limitArtists = parseOptionalNumber(imageForm.limitArtists);
+    const rateLimit = parseOptionalNumber(imageForm.rateLimit);
+    if (
+      (imageForm.limitSongs.trim() && limitSongs === null) ||
+      (imageForm.limitArtists.trim() && limitArtists === null) ||
+      (imageForm.rateLimit.trim() && rateLimit === null)
+    ) {
+      setActionError('Image sync settings must be valid numbers.');
+      return;
+    }
+    const payload: Record<string, unknown> = {
+      dry_run: imageForm.dryRun,
+    };
+    if (limitSongs !== null) payload.limit_songs = limitSongs;
+    if (limitArtists !== null) payload.limit_artists = limitArtists;
+    if (rateLimit !== null) payload.rate_limit = rateLimit;
+
+    setMetadataBusy(true);
+    try {
+      await fetchJson('/api/library/metadata/images', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setActionMessage('Image/profile sync started.');
+      refreshMetadataStatus();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to start image sync.'
+      );
+    } finally {
+      setMetadataBusy(false);
+    }
+  };
+
+  const toggleSongSelection = (shaId: string) => {
+    setSelectedSongIds((prev) =>
+      prev.includes(shaId) ? prev.filter((id) => id !== shaId) : [...prev, shaId]
+    );
+  };
+
+  const handleLinkSongs = async () => {
+    setLinkMessage(null);
+    setLinkError(null);
+    if (!selectedAlbumId) {
+      setLinkError('Select an album to link.');
+      return;
+    }
+    if (selectedSongIds.length === 0) {
+      setLinkError('Select at least one song to link.');
+      return;
+    }
+    setLinkBusy(true);
+    try {
+      const result = await fetchJson<{ linked: number }>('/api/library/songs/link', {
+        method: 'POST',
+        body: JSON.stringify({
+          album_id: selectedAlbumId,
+          sha_ids: selectedSongIds,
+          mark_verified: true,
+        }),
+      });
+      setLinkMessage(`Linked ${result.linked} song(s) to album.`);
+      setSelectedSongIds([]);
+      refreshUnlinked();
+      refreshStats();
+    } catch (error) {
+      setLinkError(error instanceof Error ? error.message : 'Failed to link songs.');
+    } finally {
+      setLinkBusy(false);
+    }
+  };
+
   return (
     <div className="bg-gradient-to-b from-gray-900 to-black min-h-full pb-32">
       <div>
@@ -514,6 +871,9 @@ export default function LibraryPage() {
                   refreshStats();
                   refreshQueue();
                   refreshPipeline();
+                  refreshMetadataStatus();
+                  refreshUnlinked();
+                  refreshAlbumCatalog(albumSearch);
                 }}
                 className="inline-flex items-center gap-2 rounded-full bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700"
               >
@@ -884,6 +1244,73 @@ export default function LibraryPage() {
                       Start pipeline
                     </button>
                   </div>
+
+                  {pipelineStatus.last_config && (
+                    <div className="mt-6 rounded-xl border border-gray-800 bg-gray-900/60 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-gray-400">
+                        <span className="uppercase tracking-wide">
+                          {pipelineStatus.running ? 'Active run details' : 'Last run details'}
+                        </span>
+                        {pipelineStatus.running && (
+                          <span className="text-emerald-300">
+                            Elapsed: {formatDuration(elapsedMs)}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-4 grid gap-3 text-xs text-gray-300 md:grid-cols-2">
+                        <div>
+                          <span className="text-gray-500">Started</span>
+                          <span className="ml-2 text-gray-200">
+                            {formatTimestamp(pipelineStatus.started_at)}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Last event</span>
+                          <span className="ml-2 text-gray-200">
+                            {lastEvent
+                              ? `${formatValue(lastEvent.stage)} · ${formatTimestamp(
+                                  lastEvent.ts as string
+                                )}`
+                              : '--'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Last error</span>
+                          <span className="ml-2 text-rose-200">
+                            {pipelineStatus.last_error || '--'}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Seed sources</span>
+                          <span className="ml-2 text-gray-200">
+                            {formatBool(pipelineConfig.seed_sources)}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="mt-4 grid gap-2 text-xs text-gray-400 md:grid-cols-2">
+                        <div>
+                          Download limit: {formatValue(pipelineConfig.download_limit)}
+                        </div>
+                        <div>
+                          Process limit: {formatValue(pipelineConfig.process_limit)}
+                        </div>
+                        <div>
+                          Workers: dl {formatValue(pipelineConfig.download_workers)}, pcm{' '}
+                          {formatValue(pipelineConfig.pcm_workers)}, hash{' '}
+                          {formatValue(pipelineConfig.hash_workers)}, embed{' '}
+                          {formatValue(pipelineConfig.embed_workers)}
+                        </div>
+                        <div>
+                          Verify: {formatBool(pipelineConfig.verify)} · Images:{' '}
+                          {formatBool(pipelineConfig.images)}
+                        </div>
+                      </div>
+                      <div className="mt-3 text-xs text-gray-500">
+                        Cache: {formatValue(pipelinePaths.preprocessed_cache_dir)} · Song
+                        cache: {formatValue(pipelinePaths.song_cache_dir)}
+                      </div>
+                    </div>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
@@ -914,7 +1341,53 @@ export default function LibraryPage() {
                     ))}
                   </div>
 
-                  <div className="mt-5 overflow-x-auto">
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-400">
+                    <div className="flex items-center gap-2">
+                      <span>Show</span>
+                      <select
+                        value={queuePageSize}
+                        onChange={(e) => {
+                          setQueuePageSize(Number(e.target.value));
+                          setQueuePage(1);
+                        }}
+                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 focus:outline-none"
+                      >
+                        {[10, 25, 50, 100].map((size) => (
+                          <option key={size} value={size}>
+                            {size}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <span>
+                      {queueTotal === 0
+                        ? 'No queued songs'
+                        : `Showing ${queueOffset + 1}-${queueOffset + queueItems.length} of ${queueTotal}`}
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setQueuePage((prev) => Math.max(1, prev - 1))}
+                        disabled={queuePage <= 1}
+                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                      >
+                        Prev
+                      </button>
+                      <span>
+                        Page {queuePage} of {queuePageCount}
+                      </span>
+                      <button
+                        onClick={() =>
+                          setQueuePage((prev) => Math.min(queuePageCount, prev + 1))
+                        }
+                        disabled={queuePage >= queuePageCount}
+                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 overflow-x-auto">
                     <table className="w-full text-left text-sm">
                       <thead className="text-gray-400">
                         <tr>
@@ -1003,56 +1476,360 @@ export default function LibraryPage() {
             )}
 
             {activeTab === 'stats' && (
-              <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+              <div className="space-y-6">
+                <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
+                  <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                    <div className="flex items-center gap-3">
+                      <ChartBarIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Database Overview</h2>
+                    </div>
+                    <p className="text-sm text-gray-400 mt-2">
+                      Core metadata metrics from Postgres and pgvector.
+                    </p>
+                    <div className="grid gap-4 mt-5 md:grid-cols-2">
+                      <div className="rounded-xl bg-gray-800/70 p-4">
+                        <p className="text-xs uppercase text-gray-400">Songs</p>
+                        <p className="text-2xl font-semibold mt-2">{stats.songs}</p>
+                      </div>
+                      <div className="rounded-xl bg-gray-800/70 p-4">
+                        <p className="text-xs uppercase text-gray-400">Verified</p>
+                        <p className="text-2xl font-semibold mt-2">{stats.verified_songs}</p>
+                      </div>
+                      <div className="rounded-xl bg-gray-800/70 p-4">
+                        <p className="text-xs uppercase text-gray-400">Embeddings</p>
+                        <p className="text-2xl font-semibold mt-2">{stats.embeddings}</p>
+                      </div>
+                      <div className="rounded-xl bg-gray-800/70 p-4">
+                        <p className="text-xs uppercase text-gray-400">Queue Total</p>
+                        <p className="text-2xl font-semibold mt-2">{queueSummary.total}</p>
+                      </div>
+                    </div>
+                    <p className="text-xs text-gray-500 mt-4">
+                      Last updated:{' '}
+                      {stats.last_updated
+                        ? new Date(stats.last_updated).toLocaleString()
+                        : '--'}
+                    </p>
+                  </section>
+
+                  <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                    <div className="flex items-center gap-3">
+                      <QueueListIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Queue Breakdown</h2>
+                    </div>
+                    <div className="mt-5 space-y-3 text-sm text-gray-300">
+                      {Object.entries(stats.queue).length === 0 && (
+                        <p className="text-gray-500">No queue metrics available yet.</p>
+                      )}
+                      {Object.entries(stats.queue).map(([status, count]) => (
+                        <div
+                          key={status}
+                          className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900/60 px-4 py-3"
+                        >
+                          <span className="capitalize">{status.replace(/_/g, ' ')}</span>
+                          <span className="text-white font-semibold">{count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center gap-3">
-                    <ChartBarIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Database Overview</h2>
+                    <ArrowPathIcon className="h-5 w-5 text-gray-300" />
+                    <h2 className="text-xl font-semibold">Metadata Verification</h2>
                   </div>
                   <p className="text-sm text-gray-400 mt-2">
-                    Core metadata metrics from Postgres and pgvector.
+                    Resolve unverified songs with MusicBrainz and update core metadata.
                   </p>
-                  <div className="grid gap-4 mt-5 md:grid-cols-2">
-                    <div className="rounded-xl bg-gray-800/70 p-4">
-                      <p className="text-xs uppercase text-gray-400">Songs</p>
-                      <p className="text-2xl font-semibold mt-2">{stats.songs}</p>
+                  <div className="grid gap-4 mt-4 md:grid-cols-3">
+                    <label className="text-sm text-gray-300">
+                      Limit
+                      <input
+                        value={verifyForm.limit}
+                        onChange={(e) =>
+                          setVerifyForm((prev) => ({ ...prev, limit: e.target.value }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Leave blank for all"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-300">
+                      Min score
+                      <input
+                        value={verifyForm.minScore}
+                        onChange={(e) =>
+                          setVerifyForm((prev) => ({
+                            ...prev,
+                            minScore: e.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-300">
+                      Rate limit (sec)
+                      <input
+                        value={verifyForm.rateLimit}
+                        onChange={(e) =>
+                          setVerifyForm((prev) => ({
+                            ...prev,
+                            rateLimit: e.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Optional"
+                      />
+                    </label>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-300 mt-4">
+                    <input
+                      type="checkbox"
+                      checked={verifyForm.dryRun}
+                      onChange={(e) =>
+                        setVerifyForm((prev) => ({ ...prev, dryRun: e.target.checked }))
+                      }
+                      className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                    />
+                    Dry run (no DB writes)
+                  </label>
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
+                    <div className="text-sm text-gray-400">
+                      Status:{' '}
+                      <span className="text-white font-semibold">
+                        {metadataStatus.verification.running ? 'Running' : 'Idle'}
+                      </span>
                     </div>
-                    <div className="rounded-xl bg-gray-800/70 p-4">
-                      <p className="text-xs uppercase text-gray-400">Verified</p>
-                      <p className="text-2xl font-semibold mt-2">{stats.verified_songs}</p>
+                    <button
+                      onClick={handleVerifyMetadata}
+                      disabled={metadataBusy || metadataStatus.verification.running}
+                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      Run verification
+                    </button>
+                  </div>
+                  <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Last run</p>
+                      <p className="text-white">
+                        {formatTimestamp(metadataStatus.verification.finished_at)}
+                      </p>
                     </div>
-                    <div className="rounded-xl bg-gray-800/70 p-4">
-                      <p className="text-xs uppercase text-gray-400">Embeddings</p>
-                      <p className="text-2xl font-semibold mt-2">{stats.embeddings}</p>
-                    </div>
-                    <div className="rounded-xl bg-gray-800/70 p-4">
-                      <p className="text-xs uppercase text-gray-400">Queue Total</p>
-                      <p className="text-2xl font-semibold mt-2">{queueSummary.total}</p>
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Last result</p>
+                      <p className="text-white">
+                        Processed {formatValue(verificationResult?.['processed'])} · Verified{' '}
+                        {formatValue(verificationResult?.['verified'])} · Skipped{' '}
+                        {formatValue(verificationResult?.['skipped'])}
+                      </p>
                     </div>
                   </div>
-                  <p className="text-xs text-gray-500 mt-4">
-                    Last updated: {stats.last_updated ? new Date(stats.last_updated).toLocaleString() : '--'}
-                  </p>
+                  {metadataStatus.verification.last_error && (
+                    <p className="mt-3 text-sm text-red-300">
+                      {metadataStatus.verification.last_error}
+                    </p>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center gap-3">
-                    <QueueListIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Queue Breakdown</h2>
+                    <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                    <h2 className="text-xl font-semibold">Image & Artist Sync</h2>
                   </div>
-                  <div className="mt-5 space-y-3 text-sm text-gray-300">
-                    {Object.entries(stats.queue).length === 0 && (
-                      <p className="text-gray-500">No queue metrics available yet.</p>
-                    )}
-                    {Object.entries(stats.queue).map(([status, count]) => (
-                      <div
-                        key={status}
-                        className="flex items-center justify-between rounded-xl border border-gray-800 bg-gray-900/60 px-4 py-3"
+                  <p className="text-sm text-gray-400 mt-2">
+                    Sync cover art, album images, and artist profiles for verified songs.
+                  </p>
+                  <div className="grid gap-4 mt-4 md:grid-cols-3">
+                    <label className="text-sm text-gray-300">
+                      Song limit
+                      <input
+                        value={imageForm.limitSongs}
+                        onChange={(e) =>
+                          setImageForm((prev) => ({ ...prev, limitSongs: e.target.value }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-300">
+                      Artist limit
+                      <input
+                        value={imageForm.limitArtists}
+                        onChange={(e) =>
+                          setImageForm((prev) => ({ ...prev, limitArtists: e.target.value }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Optional"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-300">
+                      Rate limit (sec)
+                      <input
+                        value={imageForm.rateLimit}
+                        onChange={(e) =>
+                          setImageForm((prev) => ({
+                            ...prev,
+                            rateLimit: e.target.value,
+                          }))
+                        }
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Optional"
+                      />
+                    </label>
+                  </div>
+                  <label className="inline-flex items-center gap-2 text-sm text-gray-300 mt-4">
+                    <input
+                      type="checkbox"
+                      checked={imageForm.dryRun}
+                      onChange={(e) =>
+                        setImageForm((prev) => ({ ...prev, dryRun: e.target.checked }))
+                      }
+                      className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                    />
+                    Dry run (no DB writes)
+                  </label>
+                  <div className="mt-5 flex flex-wrap items-center justify-between gap-4">
+                    <div className="text-sm text-gray-400">
+                      Status:{' '}
+                      <span className="text-white font-semibold">
+                        {metadataStatus.images.running ? 'Running' : 'Idle'}
+                      </span>
+                    </div>
+                    <button
+                      onClick={handleSyncImages}
+                      disabled={metadataBusy || metadataStatus.images.running}
+                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      Sync images & profiles
+                    </button>
+                  </div>
+                  <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Last run</p>
+                      <p className="text-white">
+                        {formatTimestamp(metadataStatus.images.finished_at)}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Last result</p>
+                      <p className="text-white">
+                        Songs {formatValue(imageResult?.['songs_processed'])} · Song images{' '}
+                        {formatValue(imageResult?.['song_images'])} · Album images{' '}
+                        {formatValue(imageResult?.['album_images'])} · Album metadata{' '}
+                        {formatValue(imageResult?.['album_metadata'])} · Album tracks{' '}
+                        {formatValue(imageResult?.['album_tracks'])} · Artist profiles{' '}
+                        {formatValue(imageResult?.['artist_profiles'])} · Artist images{' '}
+                        {formatValue(imageResult?.['artist_images'])}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Skipped</p>
+                      <p className="text-white">{formatValue(imageResult?.['skipped'])}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs uppercase text-gray-500">Failed</p>
+                      <p className="text-white">{formatValue(imageResult?.['failed'])}</p>
+                    </div>
+                  </div>
+                  {metadataStatus.images.last_error && (
+                    <p className="mt-3 text-sm text-red-300">
+                      {metadataStatus.images.last_error}
+                    </p>
+                  )}
+                </section>
+
+                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <div className="flex items-center gap-3">
+                    <MagnifyingGlassIcon className="h-5 w-5 text-gray-300" />
+                    <h2 className="text-xl font-semibold">Link Unassigned Songs</h2>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Attach songs missing album or artist metadata to an existing album record.
+                  </p>
+                  <div className="grid gap-4 mt-4 md:grid-cols-2">
+                    <label className="text-sm text-gray-300">
+                      Album search
+                      <input
+                        value={albumSearch}
+                        onChange={(e) => setAlbumSearch(e.target.value)}
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                        placeholder="Search albums or artists"
+                      />
+                    </label>
+                    <label className="text-sm text-gray-300">
+                      Album selection
+                      <select
+                        value={selectedAlbumId}
+                        onChange={(e) => setSelectedAlbumId(e.target.value)}
+                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
                       >
-                        <span className="capitalize">{status.replace(/_/g, ' ')}</span>
-                        <span className="text-white font-semibold">{count}</span>
-                      </div>
-                    ))}
+                        <option value="">Select an album</option>
+                        {albumCatalog.map((album) => (
+                          <option key={album.album_id} value={album.album_id}>
+                            {album.title} — {album.artist_name || 'Unknown Artist'}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  </div>
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <button
+                      onClick={handleLinkSongs}
+                      disabled={linkBusy || !selectedAlbumId || selectedSongIds.length === 0}
+                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      Link selected
+                    </button>
+                    <span className="text-sm text-gray-400">
+                      Selected {selectedSongIds.length} · Unassigned {unlinkedTotal}
+                    </span>
+                  </div>
+                  {linkMessage && <p className="mt-3 text-sm text-emerald-300">{linkMessage}</p>}
+                  {linkError && <p className="mt-3 text-sm text-red-300">{linkError}</p>}
+
+                  <div className="mt-4 overflow-x-auto">
+                    <table className="w-full text-left text-sm">
+                      <thead className="text-gray-400">
+                        <tr>
+                          <th className="py-2 pr-4">Select</th>
+                          <th className="py-2 pr-4">Title</th>
+                          <th className="py-2 pr-4">Artist</th>
+                          <th className="py-2 pr-4">Album</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {unlinkedSongs.length === 0 && (
+                          <tr>
+                            <td colSpan={4} className="py-6 text-gray-500">
+                              No unassigned songs found.
+                            </td>
+                          </tr>
+                        )}
+                        {unlinkedSongs.map((song) => {
+                          const checked = selectedSongIds.includes(song.sha_id);
+                          return (
+                            <tr key={song.sha_id} className="border-t border-gray-800">
+                              <td className="py-3 pr-4">
+                                <input
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => toggleSongSelection(song.sha_id)}
+                                  className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                                />
+                              </td>
+                              <td className="py-3 pr-4 text-white">{song.title}</td>
+                              <td className="py-3 pr-4 text-gray-300">
+                                {song.artist || 'Unknown'}
+                              </td>
+                              <td className="py-3 pr-4 text-gray-400">
+                                {song.album || 'Unknown'}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
                   </div>
                 </section>
               </div>

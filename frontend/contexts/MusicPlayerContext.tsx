@@ -17,8 +17,10 @@ interface MusicPlayerContextType {
   isPlaying: boolean;
   queue: Song[];
   currentIndex: number;
+  upNextQueue: Song[];
   repeatMode: RepeatMode;
   shuffleEnabled: boolean;
+  toastMessage: string | null;
   playSong: (song: Song, songList?: Song[]) => void;
   togglePlayPause: () => void;
   playNext: () => void;
@@ -28,6 +30,11 @@ interface MusicPlayerContextType {
   handleSongEnd: () => void;
   likeSong: (songId: string) => void;
   dislikeSong: (songId: string) => void;
+  addToQueue: (song: Song) => void;
+  removeFromQueue: (index: number) => void;
+  clearQueue: () => void;
+  playFromQueue: (index: number) => void;
+  clearToast: () => void;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -38,8 +45,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const [queue, setQueue] = useState<Song[]>([]);
   const [originalQueue, setOriginalQueue] = useState<Song[]>([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [upNextQueue, setUpNextQueue] = useState<Song[]>([]);
   const [repeatMode, setRepeatMode] = useState<RepeatMode>('off');
   const [shuffleEnabled, setShuffleEnabled] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   const playSong = useCallback((song: Song, songList?: Song[]) => {
     if (currentSong?.id === song.id) {
@@ -62,13 +71,23 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   }, [isPlaying]);
 
   const playNext = useCallback(() => {
+    // Check if there are songs in the "Up Next" queue
+    if (upNextQueue.length > 0) {
+      const nextSong = upNextQueue[0];
+      setUpNextQueue(prev => prev.slice(1));
+      setCurrentSong(nextSong);
+      setIsPlaying(true);
+      return;
+    }
+
+    // Otherwise, play from the main queue
     if (queue.length === 0) return;
 
     const nextIndex = (currentIndex + 1) % queue.length;
     setCurrentIndex(nextIndex);
     setCurrentSong(queue[nextIndex]);
     setIsPlaying(true);
-  }, [queue, currentIndex]);
+  }, [queue, currentIndex, upNextQueue]);
 
   const playPrevious = useCallback(() => {
     if (queue.length === 0) return;
@@ -82,7 +101,18 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     if (repeatMode === 'once') {
       // Song will restart automatically since currentTime resets to 0
       return;
-    } else if (repeatMode === 'all') {
+    }
+
+    // Check if there are songs in the "Up Next" queue
+    if (upNextQueue.length > 0) {
+      const nextSong = upNextQueue[0];
+      setUpNextQueue(prev => prev.slice(1));
+      setCurrentSong(nextSong);
+      setIsPlaying(true);
+      return;
+    }
+
+    if (repeatMode === 'all') {
       if (queue.length === 0) return;
       const nextIndex = (currentIndex + 1) % queue.length;
       setCurrentIndex(nextIndex);
@@ -99,7 +129,7 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         setIsPlaying(false);
       }
     }
-  }, [repeatMode, currentIndex, queue]);
+  }, [repeatMode, currentIndex, queue, upNextQueue]);
 
   const toggleRepeat = useCallback(() => {
     const modes: RepeatMode[] = ['off', 'all', 'once'];
@@ -168,6 +198,33 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
     console.log(`Song ${songId} disliked status toggled (stub - will interface with backend)`);
   }, []);
 
+  const addToQueue = useCallback((song: Song) => {
+    setUpNextQueue((prev) => [...prev, song]);
+    setToastMessage(`Added "${song.title}" to queue`);
+    console.log(`Added "${song.title}" to queue`);
+  }, []);
+
+  const removeFromQueue = useCallback((index: number) => {
+    setUpNextQueue((prev) => prev.filter((_, i) => i !== index));
+  }, []);
+
+  const clearQueue = useCallback(() => {
+    setUpNextQueue([]);
+  }, []);
+
+  const playFromQueue = useCallback((index: number) => {
+    const song = upNextQueue[index];
+    if (song) {
+      setCurrentSong(song);
+      setIsPlaying(true);
+      setUpNextQueue((prev) => prev.filter((_, i) => i !== index));
+    }
+  }, [upNextQueue]);
+
+  const clearToast = useCallback(() => {
+    setToastMessage(null);
+  }, []);
+
   return (
     <MusicPlayerContext.Provider
       value={{
@@ -175,8 +232,10 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         isPlaying,
         queue,
         currentIndex,
+        upNextQueue,
         repeatMode,
         shuffleEnabled,
+        toastMessage,
         playSong,
         togglePlayPause,
         playNext,
@@ -186,6 +245,11 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         handleSongEnd,
         likeSong,
         dislikeSong,
+        addToQueue,
+        removeFromQueue,
+        clearQueue,
+        playFromQueue,
+        clearToast,
       }}
     >
       {children}

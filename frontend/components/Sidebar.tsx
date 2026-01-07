@@ -1,10 +1,11 @@
 'use client';
 
 import Link from 'next/link';
-import { Cog8ToothIcon, HomeIcon, MagnifyingGlassIcon, MusicalNoteIcon, PlusCircleIcon } from '@heroicons/react/24/outline';
+import { Cog8ToothIcon, HomeIcon, MagnifyingGlassIcon, PlusCircleIcon, RectangleStackIcon } from '@heroicons/react/24/outline';
+import { Playlist } from '@/lib/types';
 
 interface SidebarProps {
-  playlists: { id: string; name: string }[];
+  playlists: Playlist[];
   onCreatePlaylist: () => void;
 }
 
@@ -42,8 +43,8 @@ export default function Sidebar({ playlists, onCreatePlaylist }: SidebarProps) {
               href="/library"
               className="flex items-center gap-4 px-3 py-2 rounded-md hover:bg-gray-800 transition-colors"
             >
-              <MusicalNoteIcon className="w-6 h-6" />
-              <span className="font-semibold">Your Library</span>
+              <RectangleStackIcon className="w-6 h-6" />
+              <span className="font-semibold">Manage library</span>
             </Link>
           </li>
           <li>

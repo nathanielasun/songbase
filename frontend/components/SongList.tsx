@@ -2,7 +2,7 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
-import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon } from '@heroicons/react/24/solid';
+import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon, QueueListIcon } from '@heroicons/react/24/solid';
 import { Song } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
 
@@ -13,6 +13,7 @@ interface SongListProps {
   onSongClick: (song: Song) => void;
   onAddToPlaylist?: (song: Song) => void;
   onDownload?: (song: Song) => void;
+  onAddToQueue?: (song: Song) => void;
 }
 
 export default function SongList({
@@ -22,16 +23,18 @@ export default function SongList({
   onSongClick,
   onAddToPlaylist,
   onDownload,
+  onAddToQueue,
 }: SongListProps) {
   return (
     <div className="w-full">
       {/* Table Header */}
-      <div className="grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto] gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800">
+      <div className="grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto] gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800">
         <div className="w-10">#</div>
         <div>Title</div>
         <div>Album</div>
         <div>Artist</div>
         <div>Duration</div>
+        <div className="w-10"></div>
         <div className="w-10"></div>
         <div className="w-10"></div>
       </div>
@@ -43,7 +46,7 @@ export default function SongList({
           return (
             <div
               key={song.id}
-              className={`grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto] gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
+              className={`grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto] gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
                 isCurrentSong ? 'bg-gray-800' : ''
               }`}
               onClick={() => onSongClick(song)}
@@ -131,6 +134,22 @@ export default function SongList({
                     title="Download song"
                   >
                     <ArrowDownTrayIcon className="w-5 h-5 text-gray-400 hover:text-pink-500" />
+                  </button>
+                )}
+              </div>
+
+              {/* Add to Queue */}
+              <div className="w-10 flex items-center justify-center">
+                {onAddToQueue && (
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onAddToQueue(song);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    title="Add to queue"
+                  >
+                    <QueueListIcon className="w-5 h-5 text-gray-400 hover:text-pink-500" />
                   </button>
                 )}
               </div>

@@ -121,10 +121,12 @@ songbase/
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
 - **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`
 - **Notes**: Sources already queued are hidden from the sources list and shown only in the pipeline queue table.
+- **Notes**: The pipeline queue table is paged (10/25/50/100).
+- **Notes**: The pipeline run panel shows live config, last event, and cache paths while running.
 
 ### frontend/app/settings/page.tsx
-- **Purpose**: Settings UI for batch sizes and storage paths.
-- **Uses**: `/api/settings`
+- **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
+- **Uses**: `/api/settings`, `/api/settings/reset`
 
 ### Usage Examples
 
@@ -213,6 +215,7 @@ try {
 - **Endpoints**:
   - `GET /api/settings`: Fetch stored settings
   - `PUT /api/settings`: Update settings (pipeline + paths)
+  - `POST /api/settings/reset`: Clear embeddings and/or hashed music (requires `confirm: "CLEAR"`)
 - **Usage**:
   ```bash
   curl http://localhost:8000/api/settings
@@ -304,6 +307,8 @@ try {
   ```
 - **Notes**: Appends progress events to `preprocessed_cache/pipeline_state.jsonl`.
 - **Optional**: Add `--images` to sync cover art and artist profiles (requires `SONGBASE_IMAGE_DATABASE_URL`).
+- **Preflight**: Verifies `tensorflow`, `tf_slim`, and `resampy` are installed before running embeddings.
+- **UI Behavior**: The web UI does not auto-seed `sources.jsonl` when starting the pipeline; use the Seed action explicitly.
 
 ### backend/processing/pipeline_state.py
 - **Purpose**: Append-only pipeline state writer and compaction utility.
@@ -326,8 +331,8 @@ try {
 
 ### backend/processing/audio_pipeline/cli.py
 - **Purpose**: Tokenize PCM WAV files into VGGish embeddings
-- **Requires**: VGGish files, TensorFlow, NumPy, VGGish checkpoint + PCA params, resampy for non-16k input
-- **Note**: TensorFlow and resampy install via `backend/api/requirements.txt` when bootstrapping.
+- **Requires**: VGGish files, TensorFlow, NumPy, VGGish checkpoint + PCA params, resampy for non-16k input, plus `tf_slim`.
+- **Note**: TensorFlow, resampy, and `tf_slim` install via `backend/api/requirements.txt` when bootstrapping.
 - **Usage**:
   ```bash
   python backend/processing/audio_pipeline/cli.py /path/to/wavs /path/to/tokens

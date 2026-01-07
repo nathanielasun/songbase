@@ -1,24 +1,34 @@
 from __future__ import annotations
 
 import datetime as dt
+import hashlib
 import json
+import string
 import threading
 from collections import deque
+from dataclasses import asdict, is_dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
 from backend import app_settings
 from backend.db.connection import get_connection
+from backend.db.image_connection import get_image_connection
 from backend.db.ingest import collect_mp3_files, ingest_paths
 from backend.processing import orchestrator
 from backend.processing.acquisition_pipeline import config as acquisition_config
 from backend.processing.acquisition_pipeline import sources as acquisition_sources
 from backend.processing.audio_pipeline import config as vggish_config
+from backend.processing.metadata_pipeline.image_pipeline import sync_images_and_profiles
+from backend.processing.metadata_pipeline.pipeline import verify_unverified_songs
+from backend.processing.storage_utils import song_cache_path
 
 router = APIRouter()
+
+ALBUM_KEY_SQL = "md5(lower(coalesce(s.album, '')) || '::' || lower(coalesce(a_primary.name, '')))"
 
 
 class IngestRequest(BaseModel):
@@ -72,6 +82,40 @@ class ClearSourcesRequest(BaseModel):
     sources_file: str | None = None
 
 
+class LinkSongsRequest(BaseModel):
+    album_id: str
+    sha_ids: list[str]
+    mark_verified: bool = True
+
+
+class CatalogEntry(BaseModel):
+    sha_id: str
+    title: str | None = None
+    album: str | None = None
+    duration_sec: int | None = None
+    release_year: int | None = None
+    track_number: int | None = None
+    verified: bool | None = None
+    verification_source: str | None = None
+    artists: list[str] = []
+    primary_artist_id: int | None = None
+    album_id: str | None = None
+
+
+class VerifyMetadataRequest(BaseModel):
+    limit: int | None = None
+    min_score: int | None = None
+    rate_limit: float | None = None
+    dry_run: bool = False
+
+
+class ImageSyncRequest(BaseModel):
+    limit_songs: int | None = None
+    limit_artists: int | None = None
+    rate_limit: float | None = None
+    dry_run: bool = False
+
+
 _pipeline_lock = threading.Lock()
 _pipeline_thread: threading.Thread | None = None
 _pipeline_state: dict[str, Any] = {
@@ -80,6 +124,30 @@ _pipeline_state: dict[str, Any] = {
     "finished_at": None,
     "last_error": None,
     "last_config": None,
+}
+
+_metadata_lock = threading.Lock()
+_metadata_threads: dict[str, threading.Thread | None] = {
+    "verification": None,
+    "images": None,
+}
+_metadata_state: dict[str, dict[str, Any]] = {
+    "verification": {
+        "running": False,
+        "started_at": None,
+        "finished_at": None,
+        "last_error": None,
+        "last_result": None,
+        "last_config": None,
+    },
+    "images": {
+        "running": False,
+        "started_at": None,
+        "finished_at": None,
+        "last_error": None,
+        "last_result": None,
+        "last_config": None,
+    },
 }
 
 
@@ -124,6 +192,183 @@ def _resolve_pipeline_paths() -> orchestrator.PipelinePaths:
         preprocessed_cache_dir=paths["preprocessed_cache_dir"].resolve(),
         song_cache_dir=paths["song_cache_dir"].resolve(),
     )
+
+
+def _normalize_sha_id(sha_id: str) -> str:
+    normalized = sha_id.strip().lower()
+    if len(normalized) != 64 or any(char not in string.hexdigits for char in normalized):
+        raise HTTPException(status_code=400, detail="Invalid song hash.")
+    return normalized
+
+
+def _normalize_album_key(value: str | None) -> str:
+    if not value:
+        return ""
+    return " ".join(value.split()).strip().lower()
+
+
+def _album_key(title: str | None, artist: str | None) -> str:
+    title_key = _normalize_album_key(title)
+    if not title_key:
+        return ""
+    artist_key = _normalize_album_key(artist)
+    return f"{title_key}::{artist_key}"
+
+
+def _album_id(title: str | None, artist: str | None) -> str:
+    base = f"{(title or '').lower()}::{(artist or '').lower()}"
+    return hashlib.md5(base.encode("utf-8")).hexdigest()
+
+
+def _ensure_artist(cur, name: str | None) -> int | None:
+    if not name:
+        return None
+    cur.execute(
+        """
+        INSERT INTO metadata.artists (name)
+        VALUES (%s)
+        ON CONFLICT (name)
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING artist_id
+        """,
+        (name,),
+    )
+    return cur.fetchone()[0]
+
+
+def _album_key_for_album_id(album_id: str) -> str | None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT album_key FROM metadata.albums WHERE album_id = %s",
+                (album_id,),
+            )
+            row = cur.fetchone()
+            if row and row[0]:
+                return row[0]
+
+            cur.execute(
+                f"""
+                SELECT
+                    s.album,
+                    COALESCE(MAX(a_primary.name), MAX(a.name))
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                WHERE s.album IS NOT NULL
+                  AND {ALBUM_KEY_SQL} = %s
+                GROUP BY s.album
+                LIMIT 1
+                """,
+                (album_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return _album_key(row[0], row[1])
+
+
+def _fetch_image_bytes(query: str, params: tuple[Any, ...]) -> tuple[bytes, str] | None:
+    with get_image_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, params)
+            row = cur.fetchone()
+            if not row:
+                return None
+            image_bytes, mime_type = row
+            if not image_bytes:
+                return None
+            return image_bytes, (mime_type or "application/octet-stream")
+
+
+def _resolve_song_file(sha_id: str) -> Path | None:
+    settings = app_settings.load_settings()
+    paths = app_settings.resolve_paths(settings)
+    try:
+        cache_path = song_cache_path(paths["song_cache_dir"], sha_id, extension=".mp3")
+    except ValueError:
+        return None
+    if cache_path.exists():
+        return cache_path
+
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT file_path
+                    FROM metadata.song_files
+                    WHERE sha_id = %s
+                    ORDER BY created_at DESC
+                    """,
+                    (sha_id,),
+                )
+                rows = cur.fetchall()
+    except Exception:
+        return None
+
+    for row in rows:
+        file_path = row[0]
+        if not file_path:
+            continue
+        candidate = Path(file_path).expanduser()
+        if candidate.exists():
+            return candidate
+    return None
+
+
+def _parse_range_header(range_header: str, file_size: int) -> tuple[int, int] | None:
+    if not range_header or not range_header.startswith("bytes="):
+        return None
+    range_value = range_header.split("=", 1)[1].strip()
+    if "," in range_value:
+        range_value = range_value.split(",", 1)[0].strip()
+    if "-" not in range_value:
+        return None
+    start_str, end_str = range_value.split("-", 1)
+    if start_str == "":
+        try:
+            suffix_len = int(end_str)
+        except ValueError:
+            return None
+        if suffix_len <= 0:
+            return None
+        suffix_len = min(suffix_len, file_size)
+        start = max(file_size - suffix_len, 0)
+        end = file_size - 1
+    else:
+        try:
+            start = int(start_str)
+        except ValueError:
+            return None
+        if end_str:
+            try:
+                end = int(end_str)
+            except ValueError:
+                return None
+        else:
+            end = file_size - 1
+        if end >= file_size:
+            end = file_size - 1
+    if start < 0 or end < start or start >= file_size:
+        return None
+    return start, end
+
+
+def _iter_file_range(path: Path, start: int, end: int, chunk_size: int = 1024 * 1024):
+    with path.open("rb") as handle:
+        handle.seek(start)
+        remaining = end - start + 1
+        while remaining > 0:
+            chunk = handle.read(min(chunk_size, remaining))
+            if not chunk:
+                break
+            remaining -= len(chunk)
+            yield chunk
 
 
 def _tail_state(path: Path, limit: int) -> list[dict[str, Any]]:
@@ -185,6 +430,59 @@ def _last_seeded_at() -> str | None:
         if isinstance(value, str):
             return value
     return None
+
+
+def _coerce_result(payload: Any) -> Any:
+    if payload is None:
+        return None
+    if is_dataclass(payload):
+        return asdict(payload)
+    if isinstance(payload, dict):
+        return payload
+    return {"result": str(payload)}
+
+
+def _start_metadata_task(
+    task: str,
+    config: dict[str, Any],
+    runner: Callable[[], Any],
+) -> dict[str, Any]:
+    with _metadata_lock:
+        thread = _metadata_threads.get(task)
+        if thread and thread.is_alive():
+            raise HTTPException(
+                status_code=409,
+                detail=f"{task} task already running.",
+            )
+        state = _metadata_state.setdefault(task, {})
+        state.update(
+            {
+                "running": True,
+                "started_at": _utc_now(),
+                "finished_at": None,
+                "last_error": None,
+                "last_result": None,
+                "last_config": config,
+            }
+        )
+
+        def _worker() -> None:
+            try:
+                result = runner()
+                with _metadata_lock:
+                    state["last_result"] = _coerce_result(result)
+            except Exception as exc:  # noqa: BLE001
+                with _metadata_lock:
+                    state["last_error"] = str(exc)
+            finally:
+                with _metadata_lock:
+                    state["running"] = False
+                    state["finished_at"] = _utc_now()
+
+        thread = threading.Thread(target=_worker, daemon=True)
+        _metadata_threads[task] = thread
+        thread.start()
+        return {"status": "started", "state": dict(state)}
 
 
 @router.post("/ingest")
@@ -276,6 +574,528 @@ async def list_songs(limit: int = 100, offset: int = 0) -> list[dict[str, Any]]:
     ]
 
 
+@router.get("/catalog")
+async def list_catalog(
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    search = q.strip() if q else None
+    where_clause = ""
+    params: list[Any] = []
+    if search:
+        pattern = f"%{search}%"
+        where_clause = """
+            WHERE s.title ILIKE %s OR s.album ILIKE %s OR a.name ILIKE %s
+        """
+        params.extend([pattern, pattern, pattern])
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(DISTINCT s.sha_id)
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                {where_clause}
+                """,
+                params,
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                f"""
+                SELECT
+                    s.sha_id,
+                    s.title,
+                    s.album,
+                    s.duration_sec,
+                    s.release_year,
+                    s.track_number,
+                    s.verified,
+                    s.verification_source,
+                    COALESCE(MAX(a_primary.artist_id), MAX(a.artist_id)) AS primary_artist_id,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        WHEN MAX(a_primary.name) IS NULL THEN NULL
+                        ELSE md5(
+                            lower(coalesce(s.album, ''))
+                            || '::'
+                            || lower(MAX(a_primary.name))
+                        )
+                    END AS album_id,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT a.name)
+                        FILTER (WHERE a.name IS NOT NULL AND sa.role = 'primary'),
+                        ARRAY[]::TEXT[]
+                    ) AS artists
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                {where_clause}
+                GROUP BY s.sha_id
+                ORDER BY s.created_at DESC
+                LIMIT %s OFFSET %s
+                """,
+                [*params, limit, offset],
+            )
+            rows = cur.fetchall()
+
+    items = [
+        CatalogEntry(
+            sha_id=row[0],
+            title=row[1],
+            album=row[2],
+            duration_sec=row[3],
+            release_year=row[4],
+            track_number=row[5],
+            verified=row[6],
+            verification_source=row[7],
+            primary_artist_id=row[8],
+            album_id=row[9],
+            artists=list(row[10] or []),
+        ).model_dump()
+        for row in rows
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "query": search,
+    }
+
+
+@router.get("/artists")
+async def list_artists(
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    search = q.strip() if q else None
+    where_clause = ""
+    params: list[Any] = []
+    if search:
+        where_clause = "WHERE a.name ILIKE %s"
+        params.append(f"%{search}%")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM metadata.artists a
+                {where_clause}
+                """,
+                params,
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                f"""
+                SELECT
+                    a.artist_id,
+                    a.name,
+                    COUNT(DISTINCT s.sha_id) AS song_count,
+                    COUNT(DISTINCT s.album) FILTER (WHERE s.album IS NOT NULL AND s.album <> '') AS album_count
+                FROM metadata.artists a
+                LEFT JOIN metadata.song_artists sa ON sa.artist_id = a.artist_id
+                LEFT JOIN metadata.songs s ON s.sha_id = sa.sha_id
+                {where_clause}
+                GROUP BY a.artist_id
+                ORDER BY a.name ASC
+                LIMIT %s OFFSET %s
+                """,
+                [*params, limit, offset],
+            )
+            rows = cur.fetchall()
+
+    items = [
+        {
+            "artist_id": row[0],
+            "name": row[1],
+            "song_count": row[2],
+            "album_count": row[3],
+        }
+        for row in rows
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "query": search,
+    }
+
+
+@router.get("/albums")
+async def list_albums(
+    q: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    search = q.strip() if q else None
+    where_clause = ""
+    params: list[Any] = []
+    if search:
+        where_clause = "WHERE a.title ILIKE %s OR a.artist_name ILIKE %s"
+        params.extend([f"%{search}%", f"%{search}%"])
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT COUNT(*)
+                FROM metadata.albums a
+                {where_clause}
+                """,
+                params,
+            )
+            total = cur.fetchone()[0]
+
+            cur.execute(
+                f"""
+                WITH song_counts AS (
+                    SELECT
+                        md5(lower(coalesce(s.album, '')) || '::' || lower(coalesce(a_primary.name, ''))) AS album_id,
+                        COUNT(*) AS song_count
+                    FROM metadata.songs s
+                    LEFT JOIN metadata.song_artists sa_primary
+                        ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                    LEFT JOIN metadata.artists a_primary
+                        ON a_primary.artist_id = sa_primary.artist_id
+                    WHERE s.album IS NOT NULL AND s.album <> ''
+                    GROUP BY md5(lower(coalesce(s.album, '')) || '::' || lower(coalesce(a_primary.name, '')))
+                )
+                SELECT
+                    a.album_id,
+                    a.title,
+                    a.artist_name,
+                    a.artist_id,
+                    a.release_year,
+                    a.track_count,
+                    a.total_duration_sec,
+                    COALESCE(sc.song_count, 0) AS song_count
+                FROM metadata.albums a
+                LEFT JOIN song_counts sc ON sc.album_id = a.album_id
+                {where_clause}
+                ORDER BY a.release_year DESC NULLS LAST, a.title ASC
+                LIMIT %s OFFSET %s
+                """,
+                [*params, limit, offset],
+            )
+            rows = cur.fetchall()
+
+    items = [
+        {
+            "album_id": row[0],
+            "title": row[1],
+            "artist_name": row[2],
+            "artist_id": row[3],
+            "release_year": row[4],
+            "track_count": row[5],
+            "duration_sec_total": row[6],
+            "song_count": row[7],
+        }
+        for row in rows
+    ]
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "query": search,
+    }
+
+
+@router.get("/artists/{artist_id}")
+async def get_artist(
+    artist_id: int,
+    song_limit: int = 100,
+    song_offset: int = 0,
+) -> dict[str, Any]:
+    if song_limit < 1:
+        raise HTTPException(status_code=400, detail="song_limit must be >= 1")
+    if song_offset < 0:
+        raise HTTPException(status_code=400, detail="song_offset must be >= 0")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name FROM metadata.artists WHERE artist_id = %s",
+                (artist_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Artist not found.")
+            artist_name = row[0]
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM metadata.song_artists sa
+                WHERE sa.artist_id = %s
+                """,
+                (artist_id,),
+            )
+            song_count = cur.fetchone()[0]
+
+            cur.execute(
+                """
+                WITH song_counts AS (
+                    SELECT
+                        md5(lower(coalesce(s.album, '')) || '::' || lower(%s)) AS album_id,
+                        COUNT(*) AS song_count
+                    FROM metadata.songs s
+                    JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                    WHERE sa.artist_id = %s
+                      AND s.album IS NOT NULL AND s.album <> ''
+                    GROUP BY md5(lower(coalesce(s.album, '')) || '::' || lower(%s))
+                )
+                SELECT
+                    a.album_id,
+                    a.title,
+                    COALESCE(sc.song_count, 0) AS song_count,
+                    a.release_year,
+                    a.total_duration_sec
+                FROM metadata.albums a
+                LEFT JOIN song_counts sc ON sc.album_id = a.album_id
+                WHERE a.artist_id = %s OR lower(a.artist_name) = lower(%s)
+                ORDER BY a.release_year DESC NULLS LAST, a.title ASC
+                """,
+                (artist_name, artist_id, artist_name, artist_id, artist_name),
+            )
+            album_rows = cur.fetchall()
+            if not album_rows:
+                cur.execute(
+                    f"""
+                    SELECT
+                        CASE
+                            WHEN s.album IS NULL OR s.album = '' THEN NULL
+                            ELSE md5(lower(coalesce(s.album, '')) || '::' || lower(%s))
+                        END AS album_id,
+                        s.album,
+                        COUNT(*) AS song_count,
+                        MAX(s.release_year) AS release_year,
+                        SUM(s.duration_sec) AS duration_total
+                    FROM metadata.songs s
+                    JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                    WHERE sa.artist_id = %s
+                      AND s.album IS NOT NULL AND s.album <> ''
+                    GROUP BY s.album
+                    ORDER BY release_year DESC NULLS LAST, s.album ASC
+                    """,
+                    (artist_name, artist_id),
+                )
+                album_rows = cur.fetchall()
+
+            cur.execute(
+                f"""
+                SELECT
+                    s.sha_id,
+                    s.title,
+                    s.album,
+                    s.duration_sec,
+                    s.track_number,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        ELSE md5(lower(coalesce(s.album, '')) || '::' || lower(%s))
+                    END AS album_id
+                FROM metadata.songs s
+                JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                WHERE sa.artist_id = %s
+                ORDER BY s.release_year DESC NULLS LAST,
+                         s.album ASC,
+                         s.track_number NULLS LAST,
+                         s.title ASC
+                LIMIT %s OFFSET %s
+                """,
+                (artist_name, artist_id, song_limit, song_offset),
+            )
+            song_rows = cur.fetchall()
+
+    return {
+        "artist_id": artist_id,
+        "name": artist_name,
+        "song_count": song_count,
+        "songs": [
+            {
+                "sha_id": row[0],
+                "title": row[1],
+                "album": row[2],
+                "duration_sec": row[3],
+                "track_number": row[4],
+                "album_id": row[5],
+            }
+            for row in song_rows
+        ],
+        "songs_limit": song_limit,
+        "songs_offset": song_offset,
+        "albums": [
+            {
+                "album_id": row[0],
+                "title": row[1],
+                "song_count": row[2],
+                "release_year": row[3],
+                "duration_sec_total": row[4],
+            }
+            for row in album_rows
+        ],
+    }
+
+
+@router.get("/albums/{album_id}")
+async def get_album(
+    album_id: str,
+    song_limit: int = 200,
+    song_offset: int = 0,
+) -> dict[str, Any]:
+    if song_limit < 1:
+        raise HTTPException(status_code=400, detail="song_limit must be >= 1")
+    if song_offset < 0:
+        raise HTTPException(status_code=400, detail="song_offset must be >= 0")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.title,
+                    a.artist_name,
+                    a.artist_id,
+                    a.release_year,
+                    a.track_count,
+                    a.total_duration_sec
+                FROM metadata.albums a
+                WHERE a.album_id = %s
+                """,
+                (album_id,),
+            )
+            album_header = cur.fetchone()
+
+            tracks: list[dict[str, Any]] = []
+            if album_header:
+                album_title, artist_name, artist_id, release_year, track_count, duration_total = (
+                    album_header
+                )
+
+                cur.execute(
+                    """
+                    SELECT
+                        track_number,
+                        title,
+                        duration_sec,
+                        musicbrainz_recording_id
+                    FROM metadata.album_tracks
+                    WHERE album_id = %s
+                    ORDER BY track_number NULLS LAST, title ASC
+                    LIMIT %s OFFSET %s
+                    """,
+                    (album_id, song_limit, song_offset),
+                )
+                track_rows = cur.fetchall()
+                tracks = [
+                    {
+                        "track_number": row[0],
+                        "title": row[1],
+                        "duration_sec": row[2],
+                        "musicbrainz_recording_id": row[3],
+                    }
+                    for row in track_rows
+                ]
+            else:
+                cur.execute(
+                    f"""
+                    SELECT
+                        s.album,
+                        a_primary.name,
+                        a_primary.artist_id,
+                        MAX(s.release_year) AS release_year,
+                        COUNT(*) AS song_count,
+                        SUM(s.duration_sec) AS duration_total
+                    FROM metadata.songs s
+                    LEFT JOIN metadata.song_artists sa_primary
+                        ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                    LEFT JOIN metadata.artists a_primary
+                        ON a_primary.artist_id = sa_primary.artist_id
+                    WHERE s.album IS NOT NULL
+                      AND {ALBUM_KEY_SQL} = %s
+                    GROUP BY s.album, a_primary.name, a_primary.artist_id
+                    """,
+                    (album_id,),
+                )
+                header = cur.fetchone()
+                if not header:
+                    raise HTTPException(status_code=404, detail="Album not found.")
+                album_title, artist_name, artist_id, release_year, track_count, duration_total = header
+
+            cur.execute(
+                f"""
+                SELECT
+                    s.sha_id,
+                    s.title,
+                    s.duration_sec,
+                    s.track_number
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
+                WHERE s.album IS NOT NULL
+                  AND {ALBUM_KEY_SQL} = %s
+                ORDER BY s.track_number NULLS LAST, s.title ASC
+                LIMIT %s OFFSET %s
+                """,
+                (album_id, song_limit, song_offset),
+            )
+            song_rows = cur.fetchall()
+
+    return {
+        "album_id": album_id,
+        "title": album_title,
+        "artist_name": artist_name,
+        "artist_id": artist_id,
+        "release_year": release_year,
+        "song_count": track_count or len(song_rows),
+        "duration_sec_total": duration_total,
+        "tracks": tracks,
+        "songs": [
+            {
+                "sha_id": row[0],
+                "title": row[1],
+                "duration_sec": row[2],
+                "track_number": row[3],
+            }
+            for row in song_rows
+        ],
+        "songs_limit": song_limit,
+        "songs_offset": song_offset,
+    }
+
+
 @router.get("/songs/{sha_id}")
 async def get_song(sha_id: str) -> dict[str, Any]:
     with get_connection() as conn:
@@ -350,6 +1170,244 @@ async def get_song(sha_id: str) -> dict[str, Any]:
     }
 
 
+@router.get("/songs/unlinked")
+async def list_unlinked_songs(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    query = """
+        SELECT
+            s.sha_id,
+            s.title,
+            s.album,
+            COALESCE(
+                MAX(a.name) FILTER (WHERE sa.role = 'primary'),
+                MAX(a.name)
+            ) AS artist_name
+        FROM metadata.songs s
+        LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+        LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+        WHERE (s.album IS NULL OR s.album = '')
+           OR a.name IS NULL
+        GROUP BY s.sha_id
+        ORDER BY s.updated_at DESC
+        LIMIT %s OFFSET %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (limit, offset))
+            rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                WHERE (s.album IS NULL OR s.album = '')
+                   OR a.name IS NULL
+                """
+            )
+            total = cur.fetchone()[0]
+
+    items = [
+        {
+            "sha_id": row[0],
+            "title": row[1],
+            "album": row[2],
+            "artist": row[3],
+        }
+        for row in rows
+    ]
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+@router.post("/songs/link")
+async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
+    if not payload.sha_ids:
+        raise HTTPException(status_code=400, detail="No songs provided.")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    title,
+                    artist_name,
+                    artist_id,
+                    musicbrainz_release_id,
+                    musicbrainz_release_group_id
+                FROM metadata.albums
+                WHERE album_id = %s
+                """,
+                (payload.album_id,),
+            )
+            album_row = cur.fetchone()
+            if not album_row:
+                raise HTTPException(status_code=404, detail="Album not found.")
+
+            album_title, artist_name, artist_id, release_id, release_group_id = album_row
+            if artist_id is None:
+                artist_id = _ensure_artist(cur, artist_name)
+
+            updated = 0
+            for sha_id in payload.sha_ids:
+                cur.execute(
+                    """
+                    UPDATE metadata.songs
+                    SET
+                        album = %s,
+                        verified = CASE WHEN %s THEN TRUE ELSE verified END,
+                        verified_at = CASE WHEN %s THEN NOW() ELSE verified_at END,
+                        verification_source = CASE WHEN %s THEN %s ELSE verification_source END,
+                        musicbrainz_release_id = COALESCE(%s, musicbrainz_release_id),
+                        musicbrainz_release_group_id = COALESCE(%s, musicbrainz_release_group_id),
+                        updated_at = NOW()
+                    WHERE sha_id = %s
+                    """,
+                    (
+                        album_title,
+                        payload.mark_verified,
+                        payload.mark_verified,
+                        payload.mark_verified,
+                        "manual",
+                        release_id,
+                        release_group_id,
+                        sha_id,
+                    ),
+                )
+                if artist_name and artist_id:
+                    cur.execute(
+                        "DELETE FROM metadata.song_artists WHERE sha_id = %s",
+                        (sha_id,),
+                    )
+                    cur.execute(
+                        """
+                        INSERT INTO metadata.song_artists (sha_id, artist_id, role)
+                        VALUES (%s, %s, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (sha_id, artist_id, "primary"),
+                    )
+                updated += cur.rowcount
+
+        conn.commit()
+
+    return {"linked": updated, "album_id": payload.album_id}
+
+
+@router.get("/stream/{sha_id}")
+async def stream_song(sha_id: str, request: Request):
+    normalized = _normalize_sha_id(sha_id)
+    song_path = _resolve_song_file(normalized)
+    if not song_path or not song_path.exists():
+        raise HTTPException(status_code=404, detail="Song file not found.")
+
+    file_size = song_path.stat().st_size
+    range_header = request.headers.get("range")
+    if range_header:
+        byte_range = _parse_range_header(range_header, file_size)
+        if not byte_range:
+            return Response(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"},
+            )
+        start, end = byte_range
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{file_size}",
+            "Accept-Ranges": "bytes",
+            "Content-Length": str(end - start + 1),
+        }
+        return StreamingResponse(
+            _iter_file_range(song_path, start, end),
+            status_code=206,
+            headers=headers,
+            media_type="audio/mpeg",
+        )
+
+    return FileResponse(
+        song_path,
+        media_type="audio/mpeg",
+        headers={"Accept-Ranges": "bytes"},
+    )
+
+
+@router.get("/images/song/{sha_id}")
+async def song_image(sha_id: str) -> Response:
+    normalized = _normalize_sha_id(sha_id)
+    payload = _fetch_image_bytes(
+        """
+        SELECT ia.image_bytes, ia.mime_type
+        FROM media.song_images si
+        JOIN media.image_assets ia ON ia.image_id = si.image_id
+        WHERE si.song_sha_id = %s AND si.image_type = %s
+        ORDER BY si.created_at DESC
+        LIMIT 1
+        """,
+        (normalized, "cover"),
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    image_bytes, mime_type = payload
+    return Response(content=image_bytes, media_type=mime_type)
+
+
+@router.get("/images/album/{album_id}")
+async def album_image(album_id: str) -> Response:
+    album_key = _album_key_for_album_id(album_id)
+    if not album_key:
+        raise HTTPException(status_code=404, detail="Album not found.")
+    payload = _fetch_image_bytes(
+        """
+        SELECT ia.image_bytes, ia.mime_type
+        FROM media.album_images ai
+        JOIN media.image_assets ia ON ia.image_id = ai.image_id
+        WHERE ai.album_key = %s AND ai.image_type = %s
+        ORDER BY ai.created_at DESC
+        LIMIT 1
+        """,
+        (album_key, "cover"),
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    image_bytes, mime_type = payload
+    return Response(content=image_bytes, media_type=mime_type)
+
+
+@router.get("/images/artist/{artist_id}")
+async def artist_image(artist_id: int) -> Response:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT name FROM metadata.artists WHERE artist_id = %s",
+                (artist_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Artist not found.")
+            artist_name = row[0]
+
+    payload = _fetch_image_bytes(
+        """
+        SELECT ia.image_bytes, ia.mime_type
+        FROM media.artist_profiles ap
+        JOIN media.image_assets ia ON ia.image_id = ap.image_id
+        WHERE lower(ap.artist_name) = lower(%s) AND ap.image_id IS NOT NULL
+        ORDER BY ap.created_at DESC
+        LIMIT 1
+        """,
+        (artist_name,),
+    )
+    if not payload:
+        raise HTTPException(status_code=404, detail="Image not found.")
+    image_bytes, mime_type = payload
+    return Response(content=image_bytes, media_type=mime_type)
+
+
 @router.post("/queue")
 async def queue_songs(payload: QueueInsertRequest) -> dict[str, Any]:
     if not payload.items:
@@ -419,7 +1477,7 @@ async def list_queue(
         if statuses:
             query += " WHERE status = ANY(%s)"
             params.append(statuses)
-    query += " ORDER BY created_at DESC LIMIT %s OFFSET %s"
+    query += " ORDER BY updated_at DESC, created_at DESC LIMIT %s OFFSET %s"
     params.extend([limit, offset])
 
     with get_connection() as conn:
@@ -555,6 +1613,52 @@ async def library_stats() -> dict[str, Any]:
     }
 
 
+@router.get("/metadata/status")
+async def metadata_status() -> dict[str, Any]:
+    with _metadata_lock:
+        return {key: dict(value) for key, value in _metadata_state.items()}
+
+
+@router.post("/metadata/verify")
+async def verify_metadata(payload: VerifyMetadataRequest) -> dict[str, Any]:
+    config = {
+        "limit": payload.limit,
+        "min_score": payload.min_score,
+        "rate_limit": payload.rate_limit,
+        "dry_run": payload.dry_run,
+    }
+
+    def _runner() -> Any:
+        return verify_unverified_songs(
+            limit=payload.limit,
+            min_score=payload.min_score,
+            rate_limit_seconds=payload.rate_limit,
+            dry_run=payload.dry_run,
+        )
+
+    return _start_metadata_task("verification", config, _runner)
+
+
+@router.post("/metadata/images")
+async def sync_images(payload: ImageSyncRequest) -> dict[str, Any]:
+    config = {
+        "limit_songs": payload.limit_songs,
+        "limit_artists": payload.limit_artists,
+        "rate_limit": payload.rate_limit,
+        "dry_run": payload.dry_run,
+    }
+
+    def _runner() -> Any:
+        return sync_images_and_profiles(
+            limit_songs=payload.limit_songs,
+            limit_artists=payload.limit_artists,
+            rate_limit_seconds=payload.rate_limit,
+            dry_run=payload.dry_run,
+        )
+
+    return _start_metadata_task("images", config, _runner)
+
+
 @router.post("/pipeline/run")
 async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
     global _pipeline_thread
@@ -607,6 +1711,10 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
             else None,
         )
         pipeline_paths = _resolve_pipeline_paths()
+        try:
+            orchestrator.preflight_dependencies()
+        except RuntimeError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
         _pipeline_state.update(
             {

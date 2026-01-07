@@ -21,6 +21,8 @@ def _fetch_unverified_songs(limit: int | None) -> list[dict]:
         SELECT
             s.sha_id,
             s.title,
+            s.album,
+            s.duration_sec,
             COALESCE(
                 ARRAY_AGG(DISTINCT a.name)
                 FILTER (WHERE a.name IS NOT NULL),
@@ -45,7 +47,13 @@ def _fetch_unverified_songs(limit: int | None) -> list[dict]:
             rows = cur.fetchall()
 
     return [
-        {"sha_id": row[0], "title": row[1], "artists": list(row[2])}
+        {
+            "sha_id": row[0],
+            "title": row[1],
+            "album": row[2],
+            "duration_sec": row[3],
+            "artists": list(row[4]),
+        }
         for row in rows
     ]
 
@@ -112,6 +120,8 @@ def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
             verification_source = %s,
             verification_score = %s,
             musicbrainz_recording_id = %s,
+            musicbrainz_release_id = %s,
+            musicbrainz_release_group_id = %s,
             updated_at = NOW()
         WHERE sha_id = %s
         """,
@@ -124,6 +134,8 @@ def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
             config.VERIFICATION_SOURCE,
             match.score,
             match.mbid,
+            match.release_id,
+            match.release_group_id,
             sha_id,
         ),
     )
@@ -149,13 +161,22 @@ def verify_unverified_songs(
                 title = song["title"]
                 artists = song["artists"]
                 artist = artists[0] if artists else None
+                album = song.get("album") or None
+                duration_sec = song.get("duration_sec")
 
-                match = resolve_match(
-                    title,
-                    artist,
-                    min_score=min_score,
-                    rate_limit_seconds=rate_limit_seconds,
-                )
+                try:
+                    match = resolve_match(
+                        title,
+                        artist,
+                        artists=artists,
+                        album=album,
+                        duration_sec=duration_sec,
+                        min_score=min_score,
+                        rate_limit_seconds=rate_limit_seconds,
+                    )
+                except Exception:  # noqa: BLE001
+                    skipped += 1
+                    continue
                 if not match:
                     skipped += 1
                     continue

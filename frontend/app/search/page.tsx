@@ -8,17 +8,23 @@ import { PlayIcon } from '@heroicons/react/24/solid';
 import { mockSongs, mockArtists, mockAlbums, mockPlaylists } from '@/lib/mockData';
 import { Song, Artist, Album, Playlist } from '@/lib/types';
 import SongList from '@/components/SongList';
+import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
+import { usePlaylist } from '@/contexts/PlaylistContext';
 
 type SearchCategory = 'all' | 'songs' | 'artists' | 'albums' | 'playlists';
 type SortOption = 'relevance' | 'alphabetical' | 'recent';
 
 export default function SearchPage() {
-  const { currentSong, isPlaying, playSong } = useMusicPlayer();
+  const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
+  const { playlists, addSongToPlaylist, createPlaylist } = usePlaylist();
+
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<SearchCategory>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
+  const [isAddToPlaylistModalOpen, setIsAddToPlaylistModalOpen] = useState(false);
+  const [selectedSong, setSelectedSong] = useState<Song | null>(null);
 
   // Extract all unique genres
   const allGenres = useMemo(() => {
@@ -101,6 +107,11 @@ export default function SearchPage() {
 
   const handleSongClick = (song: Song) => {
     playSong(song, mockSongs);
+  };
+
+  const handleAddToPlaylist = (song: Song) => {
+    setSelectedSong(song);
+    setIsAddToPlaylistModalOpen(true);
   };
 
   const handleDownloadSong = (song: Song) => {
@@ -241,7 +252,9 @@ export default function SearchPage() {
                       currentSong={currentSong}
                       isPlaying={isPlaying}
                       onSongClick={handleSongClick}
+                      onAddToPlaylist={handleAddToPlaylist}
                       onDownload={handleDownloadSong}
+                      onAddToQueue={addToQueue}
                     />
                     {activeCategory === 'all' && searchResults.songs.length > 5 && (
                       <button
@@ -425,6 +438,23 @@ export default function SearchPage() {
           </div>
         </div>
       )}
+
+      {/* Modals */}
+      <AddToPlaylistModal
+        isOpen={isAddToPlaylistModalOpen}
+        song={selectedSong}
+        playlists={playlists}
+        onClose={() => {
+          setIsAddToPlaylistModalOpen(false);
+          setSelectedSong(null);
+        }}
+        onAddToPlaylist={addSongToPlaylist}
+        onCreateNew={() => {
+          setIsAddToPlaylistModalOpen(false);
+          setSelectedSong(null);
+          createPlaylist(`My Playlist #${playlists.length + 1}`);
+        }}
+      />
     </div>
   );
 }

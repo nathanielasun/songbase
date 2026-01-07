@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import ssl
 import time
 import urllib.error
 import urllib.request
@@ -12,6 +13,7 @@ import musicbrainzngs
 from backend.db.connection import get_connection
 
 from . import config, musicbrainz_client
+from .album_pipeline import sync_release_metadata
 from .image_db import (
     album_image_exists,
     artist_profile_exists,
@@ -43,6 +45,8 @@ class ImagePipelineResult:
     songs_processed: int
     song_images: int
     album_images: int
+    album_metadata: int
+    album_tracks: int
     artist_profiles: int
     artist_images: int
     skipped: int
@@ -53,6 +57,82 @@ def _sleep(rate_limit_seconds: float | None) -> None:
     delay = rate_limit_seconds or config.MUSICBRAINZ_RATE_LIMIT_SECONDS
     if delay > 0:
         time.sleep(delay)
+
+
+def _retry_delay(attempt: int) -> float:
+    base = config.IMAGE_RETRY_BACKOFF_SEC
+    maximum = config.IMAGE_RETRY_MAX_BACKOFF_SEC
+    return min(maximum, base * (2**attempt))
+
+
+def _should_retry(exc: Exception) -> bool:
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in {429, 500, 502, 503, 504}
+    if isinstance(exc, urllib.error.URLError):
+        return True
+    if isinstance(exc, ssl.SSLError):
+        return True
+    if isinstance(exc, TimeoutError):
+        return True
+    if isinstance(exc, ConnectionResetError):
+        return True
+    return False
+
+
+def _with_retries(
+    operation,
+    *,
+    retry_on_json_error: bool,
+):
+    attempts = max(0, config.IMAGE_REQUEST_RETRIES)
+    last_exc: Exception | None = None
+    for attempt in range(attempts + 1):
+        try:
+            return operation()
+        except json.JSONDecodeError as exc:
+            last_exc = exc
+            if not retry_on_json_error or attempt >= attempts:
+                raise
+            time.sleep(_retry_delay(attempt))
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt >= attempts or not _should_retry(exc):
+                raise
+            time.sleep(_retry_delay(attempt))
+    if last_exc:
+        raise last_exc
+
+
+def _mb_retry_delay(attempt: int) -> float:
+    base = config.MUSICBRAINZ_RETRY_BACKOFF_SEC
+    maximum = config.MUSICBRAINZ_RETRY_MAX_BACKOFF_SEC
+    return min(maximum, base * (2**attempt))
+
+
+def _mb_with_retries(operation):
+    attempts = max(0, config.MUSICBRAINZ_REQUEST_RETRIES)
+    last_exc: Exception | None = None
+    for attempt in range(attempts + 1):
+        try:
+            return operation()
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt >= attempts:
+                raise
+            if not isinstance(
+                exc,
+                (
+                    musicbrainzngs.NetworkError,
+                    urllib.error.URLError,
+                    ssl.SSLError,
+                    TimeoutError,
+                    ConnectionResetError,
+                ),
+            ):
+                raise
+            time.sleep(_mb_retry_delay(attempt))
+    if last_exc:
+        raise last_exc
 
 
 def _normalize_key(value: str | None) -> str:
@@ -129,9 +209,13 @@ def _request_json(url: str, timeout: int) -> dict:
         url,
         headers={"User-Agent": _user_agent()},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        payload = response.read()
-    return json.loads(payload.decode("utf-8"))
+
+    def _operation() -> dict:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+        return json.loads(payload.decode("utf-8"))
+
+    return _with_retries(_operation, retry_on_json_error=True)
 
 
 def _download_binary(url: str, timeout: int, max_bytes: int) -> tuple[bytes, str]:
@@ -139,12 +223,16 @@ def _download_binary(url: str, timeout: int, max_bytes: int) -> tuple[bytes, str
         url,
         headers={"User-Agent": _user_agent()},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        mime = response.headers.get("Content-Type", "application/octet-stream")
-        data = response.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise ValueError("Image exceeds maximum allowed size.")
-    return data, mime.split(";")[0].strip()
+
+    def _operation() -> tuple[bytes, str]:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            mime = response.headers.get("Content-Type", "application/octet-stream")
+            data = response.read(max_bytes + 1)
+        if len(data) > max_bytes:
+            raise ValueError("Image exceeds maximum allowed size.")
+        return data, mime.split(";")[0].strip()
+
+    return _with_retries(_operation, retry_on_json_error=False)
 
 
 def _user_agent() -> str:
@@ -164,25 +252,31 @@ def _resolve_recording(
             rate_limit_seconds=rate_limit_seconds,
         )
 
-    best = musicbrainz_client.search_recording(
+    match = musicbrainz_client.resolve_match(
         song.title,
         song.artist,
+        artists=[song.artist] if song.artist else None,
+        album=song.album or None,
+        duration_sec=None,
         rate_limit_seconds=rate_limit_seconds,
     )
-    if not best or not best.get("id"):
+    if not match:
         return None
     return musicbrainz_client.fetch_recording(
-        best["id"],
+        match.mbid,
         rate_limit_seconds=rate_limit_seconds,
     )
 
 
-def _extract_release(recording: dict) -> tuple[str | None, str | None]:
-    releases = recording.get("release-list") or []
-    if not releases:
-        return None, None
-    release = releases[0]
-    return release.get("id"), release.get("title")
+def _extract_release(
+    recording: dict,
+    album_hint: str | None,
+) -> tuple[str | None, str | None]:
+    release_title, _year, release_id, _group_id = musicbrainz_client.extract_release_details(
+        recording,
+        album_hint,
+    )
+    return release_id, release_title
 
 
 def _extract_primary_artist(recording: dict) -> tuple[str | None, str | None]:
@@ -206,7 +300,7 @@ def _fetch_cover_art(
     try:
         payload = _request_json(metadata_url, config.IMAGE_REQUEST_TIMEOUT_SEC)
         _sleep(rate_limit_seconds)
-    except (urllib.error.URLError, ValueError):
+    except (urllib.error.URLError, ValueError, json.JSONDecodeError, ssl.SSLError, TimeoutError, ConnectionResetError):
         return None
 
     images = payload.get("images") or []
@@ -233,7 +327,7 @@ def _fetch_cover_art(
             config.IMAGE_MAX_BYTES,
         )
         _sleep(rate_limit_seconds)
-    except (urllib.error.URLError, ValueError):
+    except (urllib.error.URLError, ValueError, ssl.SSLError, TimeoutError, ConnectionResetError):
         return None
 
     return data, (mime or fallback_mime), image_url
@@ -243,7 +337,9 @@ def _search_artist_by_name(
     name: str,
     rate_limit_seconds: float | None,
 ) -> dict | None:
-    result = musicbrainzngs.search_artists(artist=name, limit=5)
+    result = _mb_with_retries(
+        lambda: musicbrainzngs.search_artists(artist=name, limit=5)
+    )
     _sleep(rate_limit_seconds)
 
     artists = result.get("artist-list") or []
@@ -268,9 +364,11 @@ def _fetch_artist_profile(
     if not best or not best.get("id"):
         return {}, None
 
-    result = musicbrainzngs.get_artist_by_id(
-        best["id"],
-        includes=["url-rels", "tags", "aliases"],
+    result = _mb_with_retries(
+        lambda: musicbrainzngs.get_artist_by_id(
+            best["id"],
+            includes=["url-rels", "tags", "aliases"],
+        )
     )
     _sleep(rate_limit_seconds)
 
@@ -293,12 +391,12 @@ def _fetch_artist_profile(
 def _store_cover_art(
     cur,
     song: SongCandidate,
-    recording: dict,
+    release_id: str | None,
+    release_title: str | None,
+    artist_name: str | None,
     rate_limit_seconds: float | None,
     dry_run: bool,
 ) -> tuple[int, int]:
-    release_id, release_title = _extract_release(recording)
-    artist_name, _artist_id = _extract_primary_artist(recording)
     if not release_id:
         return 0, 0
 
@@ -357,7 +455,7 @@ def _store_artist_profile(
                 config.IMAGE_MAX_BYTES,
             )
             _sleep(rate_limit_seconds)
-        except (urllib.error.URLError, ValueError):
+        except (urllib.error.URLError, ValueError, ssl.SSLError, TimeoutError, ConnectionResetError):
             image_bytes = None
             mime_type = None
         if image_bytes and mime_type and not dry_run:
@@ -397,10 +495,14 @@ def sync_images_and_profiles(
     songs_processed = 0
     song_images = 0
     album_images = 0
+    album_metadata = 0
+    album_tracks = 0
     artist_profiles = 0
     artist_images = 0
     skipped = 0
     failed = 0
+
+    synced_releases: set[str] = set()
 
     with with_image_connection() as image_conn:
         with image_conn.cursor() as image_cur:
@@ -431,10 +533,32 @@ def sync_images_and_profiles(
                     if not recording:
                         skipped += 1
                         continue
+
+                    release_id, release_title = _extract_release(
+                        recording,
+                        song.album,
+                    )
+                    artist_name, _artist_id = _extract_primary_artist(recording)
+
+                    if release_id and release_id not in synced_releases:
+                        synced_releases.add(release_id)
+                        try:
+                            album_delta, track_delta = sync_release_metadata(
+                                release_id,
+                                rate_limit_seconds=rate_limit_seconds,
+                                dry_run=dry_run,
+                            )
+                            album_metadata += album_delta
+                            album_tracks += track_delta
+                        except Exception:  # noqa: BLE001
+                            failed += 1
+
                     song_delta, album_delta = _store_cover_art(
                         image_cur,
                         song,
-                        recording,
+                        release_id,
+                        release_title,
+                        artist_name,
                         rate_limit_seconds,
                         dry_run,
                     )
@@ -470,6 +594,8 @@ def sync_images_and_profiles(
         songs_processed=songs_processed,
         song_images=song_images,
         album_images=album_images,
+        album_metadata=album_metadata,
+        album_tracks=album_tracks,
         artist_profiles=artist_profiles,
         artist_images=artist_images,
         skipped=skipped,

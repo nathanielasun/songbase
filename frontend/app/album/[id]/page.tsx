@@ -1,27 +1,110 @@
 'use client';
 
+import { useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
-import { mockAlbums, mockSongs, formatDate, getTotalDuration, formatDuration } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
+import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
+import { usePlaylist } from '@/contexts/PlaylistContext';
+
+type AlbumSong = {
+  sha_id: string;
+  title: string;
+  duration_sec?: number | null;
+  track_number?: number | null;
+};
+
+type AlbumResponse = {
+  album_id: string;
+  title: string;
+  artist_name?: string | null;
+  artist_id?: number | null;
+  release_year?: number | null;
+  song_count: number;
+  duration_sec_total?: number | null;
+  songs: AlbumSong[];
+};
+
+const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `Request failed: ${response.status}`);
+  }
+  return response.json() as Promise<T>;
+};
+
+const formatDuration = (seconds?: number | null) => {
+  if (!seconds || seconds < 0) {
+    return '--';
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return `${minutes} min ${remainder} sec`;
+};
 
 export default function AlbumPage() {
   const params = useParams();
   const albumId = params.id as string;
-  const { currentSong, isPlaying, playSong } = useMusicPlayer();
+  const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
+  const { playlists, addSongToPlaylist, createPlaylist } = usePlaylist();
 
-  const album = mockAlbums.find((a) => a.id === albumId);
-  const albumSongs = mockSongs.filter((song) => song.albumId === albumId);
+  const [isAddToPlaylistModalOpen, setIsAddToPlaylistModalOpen] = useState(false);
+  const [selectedSong, setSelectedSong] = useState<Song | null>(null);
+  const [albumData, setAlbumData] = useState<AlbumResponse | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [showAlbumImage, setShowAlbumImage] = useState(true);
 
-  if (!album) {
+  useEffect(() => {
+    let active = true;
+    setLoadError(null);
+    fetchJson<AlbumResponse>(`/api/library/albums/${albumId}`)
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        setAlbumData(data);
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setLoadError(error instanceof Error ? error.message : String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [albumId]);
+
+  const albumSongs = useMemo(() => {
+    if (!albumData) {
+      return [];
+    }
+    return albumData.songs.map((song) => ({
+      id: song.sha_id,
+      hashId: song.sha_id,
+      title: song.title,
+      artist: albumData.artist_name || 'Unknown Artist',
+      artistId: albumData.artist_id ? String(albumData.artist_id) : undefined,
+      album: albumData.title,
+      albumId: albumData.album_id,
+      duration: song.duration_sec ?? 0,
+    }));
+  }, [albumData]);
+
+  const totalDuration = albumData?.duration_sec_total
+    ? Math.max(0, albumData.duration_sec_total)
+    : albumSongs.reduce((sum, song) => sum + (song.duration || 0), 0);
+
+  if (loadError) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white flex items-center justify-center">
         <div className="text-center">
-          <h1 className="text-4xl font-bold mb-4">Album Not Found</h1>
+          <h1 className="text-4xl font-bold mb-4">Album Unavailable</h1>
+          <p className="text-gray-400 mb-6">{loadError}</p>
           <Link href="/" className="text-pink-500 hover:underline">
             Return to Home
           </Link>
@@ -30,16 +113,27 @@ export default function AlbumPage() {
     );
   }
 
-  const totalDuration = getTotalDuration(albumSongs);
-  const totalMinutes = Math.floor(totalDuration / 60);
-  const totalSeconds = totalDuration % 60;
+  if (!albumData) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white flex items-center justify-center">
+        <div className="text-center text-gray-400">Loading album...</div>
+      </div>
+    );
+  }
+
+  const albumImageUrl = `/api/library/images/album/${albumId}`;
 
   const handleSongClick = (song: Song) => {
     playSong(song, albumSongs);
   };
 
+  const handleAddToPlaylist = (song: Song) => {
+    setSelectedSong(song);
+    setIsAddToPlaylistModalOpen(true);
+  };
+
   const handleDownloadAlbum = () => {
-    console.log('Download album:', album.title, '(stub - will interface with backend)');
+    console.log('Download album:', albumData.title, '(stub - will interface with backend)');
   };
 
   const handleDownloadSong = (song: Song) => {
@@ -48,7 +142,6 @@ export default function AlbumPage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white pb-32">
-      {/* Header */}
       <div className="bg-gradient-to-b from-pink-900/40 to-transparent">
         <div className="p-8">
           <Link
@@ -60,55 +153,49 @@ export default function AlbumPage() {
           </Link>
 
           <div className="flex items-end gap-6">
-            {album.coverArt && (
-              <Image
-                src={album.coverArt}
-                alt={album.title}
-                width={232}
-                height={232}
-                className="rounded-lg shadow-2xl"
+            {showAlbumImage ? (
+              <img
+                src={albumImageUrl}
+                alt={albumData.title}
+                className="h-56 w-56 rounded-lg object-cover bg-gray-800 shadow-2xl"
+                onError={() => setShowAlbumImage(false)}
               />
+            ) : (
+              <div className="h-56 w-56 rounded-lg bg-gray-800 shadow-2xl" />
             )}
             <div className="flex-1">
-              <p className="text-sm font-semibold mb-2">{album.type.toUpperCase()}</p>
-              <h1 className="text-6xl font-bold mb-4">{album.title}</h1>
+              <p className="text-sm font-semibold mb-2">ALBUM</p>
+              <h1 className="text-6xl font-bold mb-4">{albumData.title}</h1>
               <div className="flex items-center gap-2">
-                <Link
-                  href={`/artist/${album.artistId}`}
-                  className="text-2xl font-semibold hover:underline"
-                >
-                  {album.artistName}
-                </Link>
+                {albumData.artist_id ? (
+                  <Link
+                    href={`/artist/${albumData.artist_id}`}
+                    className="text-2xl font-semibold hover:underline"
+                  >
+                    {albumData.artist_name || 'Unknown Artist'}
+                  </Link>
+                ) : (
+                  <span className="text-2xl font-semibold">
+                    {albumData.artist_name || 'Unknown Artist'}
+                  </span>
+                )}
               </div>
               <div className="flex items-center gap-2 text-sm text-gray-300 mt-4">
-                {album.releaseDate && (
+                {albumData.release_year && (
                   <>
-                    <span>{formatDate(album.releaseDate)}</span>
+                    <span>{albumData.release_year}</span>
                     <span>•</span>
                   </>
                 )}
-                <span>{albumSongs.length} songs</span>
+                <span>{albumData.song_count} songs</span>
                 <span>•</span>
-                <span>{totalMinutes} min {totalSeconds} sec</span>
+                <span>{formatDuration(totalDuration)}</span>
               </div>
-              {album.genres && album.genres.length > 0 && (
-                <div className="flex gap-2 mt-4">
-                  {album.genres.map((genre) => (
-                    <span
-                      key={genre}
-                      className="px-3 py-1 bg-gray-800 rounded-full text-sm"
-                    >
-                      {genre}
-                    </span>
-                  ))}
-                </div>
-              )}
             </div>
           </div>
         </div>
       </div>
 
-      {/* Actions */}
       <div className="px-8 py-6 flex items-center gap-4">
         <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
           <PlayIcon className="w-6 h-6" />
@@ -122,7 +209,6 @@ export default function AlbumPage() {
         </button>
       </div>
 
-      {/* Song List */}
       <div className="px-8">
         {albumSongs.length > 0 ? (
           <SongList
@@ -130,7 +216,9 @@ export default function AlbumPage() {
             currentSong={currentSong}
             isPlaying={isPlaying}
             onSongClick={handleSongClick}
+            onAddToPlaylist={handleAddToPlaylist}
             onDownload={handleDownloadSong}
+            onAddToQueue={addToQueue}
           />
         ) : (
           <div className="text-center py-16">
@@ -138,6 +226,22 @@ export default function AlbumPage() {
           </div>
         )}
       </div>
+
+      <AddToPlaylistModal
+        isOpen={isAddToPlaylistModalOpen}
+        song={selectedSong}
+        playlists={playlists}
+        onClose={() => {
+          setIsAddToPlaylistModalOpen(false);
+          setSelectedSong(null);
+        }}
+        onAddToPlaylist={addSongToPlaylist}
+        onCreateNew={() => {
+          setIsAddToPlaylistModalOpen(false);
+          setSelectedSong(null);
+          createPlaylist(`My Playlist #${playlists.length + 1}`);
+        }}
+      />
     </div>
   );
 }

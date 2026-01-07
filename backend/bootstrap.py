@@ -25,6 +25,7 @@ REQUIRED_MODULES = (
     "mutagen",
     "resampy",
     "tensorflow",
+    "tf_slim",
 )
 
 

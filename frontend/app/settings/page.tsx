@@ -21,6 +21,13 @@ type SettingsPayload = {
   };
 };
 
+type ResetResponse = {
+  songs_deleted: number;
+  embeddings_deleted: number;
+  song_cache_entries_deleted: number;
+  embedding_files_deleted: number;
+};
+
 type FormState = {
   downloadLimit: string;
   processLimit: string;
@@ -54,6 +61,8 @@ export default function SettingsPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resetEmbeddings, setResetEmbeddings] = useState(false);
+  const [resetHashedMusic, setResetHashedMusic] = useState(false);
 
   const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, {
@@ -138,6 +147,49 @@ export default function SettingsPage() {
       setStatusMessage('Settings saved. Changes apply on the next pipeline run.');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleReset = async () => {
+    setStatusMessage(null);
+    setErrorMessage(null);
+    if (!resetEmbeddings && !resetHashedMusic) {
+      setErrorMessage('Select at least one reset option.');
+      return;
+    }
+    const confirm = window.prompt(
+      'Type CLEAR to confirm wiping selected data. This cannot be undone.'
+    );
+    if (confirm !== 'CLEAR') {
+      setErrorMessage('Reset cancelled. Type CLEAR to confirm.');
+      return;
+    }
+    setBusy(true);
+    try {
+      const result = await fetchJson<ResetResponse>('/api/settings/reset', {
+        method: 'POST',
+        body: JSON.stringify({
+          clear_embeddings: resetEmbeddings,
+          clear_hashed_music: resetHashedMusic,
+          confirm,
+        }),
+      });
+      const parts = [];
+      if (resetHashedMusic) {
+        parts.push(`songs removed: ${result.songs_deleted}`);
+        parts.push(`cache entries removed: ${result.song_cache_entries_deleted}`);
+      }
+      if (resetEmbeddings || resetHashedMusic) {
+        parts.push(`embeddings removed: ${result.embeddings_deleted}`);
+        parts.push(`embedding files removed: ${result.embedding_files_deleted}`);
+      }
+      setStatusMessage(`Reset complete. ${parts.join(', ')}.`);
+      setResetEmbeddings(false);
+      setResetHashedMusic(false);
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : 'Reset failed.');
     } finally {
       setBusy(false);
     }
@@ -309,6 +361,55 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-500 mt-4">
                 Changes apply when the backend restarts or the next pipeline run begins.
               </p>
+            </section>
+
+            <section className="rounded-2xl bg-red-500/10 p-6 border border-red-500/30 lg:col-span-2">
+              <div className="flex items-center gap-3">
+                <WrenchScrewdriverIcon className="h-5 w-5 text-red-200" />
+                <h2 className="text-xl font-semibold text-red-100">Danger Zone</h2>
+              </div>
+              <p className="text-sm text-red-200/80 mt-2">
+                Reset stored data to recover from pipeline issues. This is permanent.
+              </p>
+              <div className="mt-4 grid gap-3 text-sm text-red-100">
+                <label className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={resetEmbeddings}
+                    onChange={(e) => setResetEmbeddings(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-red-500/40 bg-red-500/10 text-red-200 focus:ring-0"
+                  />
+                  <span>
+                    <span className="font-semibold">Clear embeddings</span>
+                    <span className="block text-xs text-red-200/70">
+                      Removes VGGish vectors from Postgres and deletes cached embedding files.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={resetHashedMusic}
+                    onChange={(e) => setResetHashedMusic(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-red-500/40 bg-red-500/10 text-red-200 focus:ring-0"
+                  />
+                  <span>
+                    <span className="font-semibold">Clear hashed music</span>
+                    <span className="block text-xs text-red-200/70">
+                      Deletes `.song_cache` files and removes song metadata (this also clears embeddings).
+                    </span>
+                  </span>
+                </label>
+              </div>
+              <div className="flex justify-end mt-4">
+                <button
+                  onClick={handleReset}
+                  disabled={busy}
+                  className="rounded-full border border-red-400 bg-red-500/20 px-5 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/30 disabled:opacity-50"
+                >
+                  Clear selected data
+                </button>
+              </div>
             </section>
           </div>
       </div>

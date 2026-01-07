@@ -19,10 +19,30 @@ DOWNLOAD_STATUS_FAILED = "failed"
 
 DEFAULT_WORKERS = max(1, min(4, os.cpu_count() or 2))
 
-YTDLP_FORMAT = "bestaudio/best"
-YTDLP_RETRIES = 2
+def _parse_bool(value: str | None, default: bool = False) -> bool:
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+YTDLP_FORMAT = os.environ.get(
+    "SONGBASE_YTDLP_FORMAT",
+    "bestaudio[ext=m4a]/bestaudio/best",
+)
+YTDLP_RETRIES = int(os.environ.get("SONGBASE_YTDLP_RETRIES", "2"))
+YTDLP_FRAGMENT_RETRIES = int(os.environ.get("SONGBASE_YTDLP_FRAGMENT_RETRIES", "5"))
+YTDLP_EXTRACTOR_RETRIES = int(os.environ.get("SONGBASE_YTDLP_EXTRACTOR_RETRIES", "3"))
+YTDLP_SLEEP_INTERVAL = float(os.environ.get("SONGBASE_YTDLP_SLEEP_INTERVAL", "1.0"))
+YTDLP_MAX_SLEEP_INTERVAL = float(
+    os.environ.get("SONGBASE_YTDLP_MAX_SLEEP_INTERVAL", "3.0")
+)
+YTDLP_FORCE_IPV4 = _parse_bool(os.environ.get("SONGBASE_YTDLP_FORCE_IPV4"))
+YTDLP_COOKIES_FILE = os.environ.get("SONGBASE_YTDLP_COOKIES_FILE")
+YTDLP_DEBUG = _parse_bool(os.environ.get("SONGBASE_YTDLP_DEBUG"), default=True)
 YTDLP_AUDIO_FORMAT = "mp3"
 YTDLP_AUDIO_QUALITY = "0"
+YTDLP_SEARCH_COUNT = int(os.environ.get("SONGBASE_YTDLP_SEARCH_COUNT", "5"))
+YTDLP_MIN_DURATION = int(os.environ.get("SONGBASE_YTDLP_MIN_DURATION", "30"))
 
 # Discovery settings (song list acquisition).
 DISCOVERY_SEED_GENRES = int(os.environ.get("SONGBASE_DISCOVERY_SEED_GENRES", "5"))

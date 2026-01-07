@@ -62,6 +62,8 @@ def main() -> int:
         f"Songs processed: {result.songs_processed}, "
         f"Song images: {result.song_images}, "
         f"Album images: {result.album_images}, "
+        f"Album metadata: {result.album_metadata}, "
+        f"Album tracks: {result.album_tracks}, "
         f"Artist profiles: {result.artist_profiles}, "
         f"Artist images: {result.artist_images}, "
         f"Skipped: {result.skipped}, "

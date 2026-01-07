@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import sys
+import importlib
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,21 @@ STATUS_EMBEDDED = "embedded"
 STATUS_STORED = "stored"
 STATUS_DUPLICATE = "duplicate"
 STATUS_FAILED = "failed"
+
+
+def preflight_dependencies() -> None:
+    missing: list[str] = []
+    for module in ("resampy", "tensorflow", "tf_slim"):
+        try:
+            importlib.import_module(module)
+        except Exception as exc:  # noqa: BLE001
+            missing.append(f"{module} ({exc})")
+    if missing:
+        details = ", ".join(missing)
+        raise RuntimeError(
+            "Missing Python dependencies for hashing/embedding: "
+            f"{details}. Install via backend/api/requirements.txt."
+        )
 
 
 @dataclass(frozen=True)
@@ -384,6 +400,49 @@ def _rename_embedding(source: Path, target: Path) -> Path:
     return target
 
 
+def _cleanup_preprocessed_cache(
+    item: ProcessingItem,
+    paths: PipelinePaths,
+    *,
+    keep_download: bool = False,
+    keep_metadata: bool = False,
+) -> None:
+    candidates: list[Path] = []
+    for path in paths.preprocessed_cache_dir.glob(f"{item.queue_id}.*"):
+        if path.is_file():
+            candidates.append(path)
+    candidates.extend(
+        [
+            _raw_pcm_path(paths, item.queue_id),
+            _normalized_pcm_path(paths, item.queue_id),
+            _embedding_temp_path(paths, item.queue_id),
+        ]
+    )
+    skip: set[Path] = set()
+    if keep_download:
+        try:
+            skip.add(item.download_path.resolve())
+        except FileNotFoundError:
+            pass
+    if keep_metadata:
+        try:
+            skip.add(item.metadata_path.resolve())
+        except FileNotFoundError:
+            pass
+    seen: set[Path] = set()
+    for path in candidates:
+        resolved = path.resolve()
+        if resolved in seen or resolved in skip:
+            continue
+        seen.add(resolved)
+        if not resolved.exists():
+            continue
+        try:
+            resolved.unlink()
+        except OSError:
+            continue
+
+
 def _update_database(
     sha_id: str,
     metadata: dict,
@@ -461,6 +520,7 @@ def _process_items(
                 result = future.result()
             except Exception as exc:  # noqa: BLE001
                 _handle_failure(item, state, "pcm_raw_failed", exc)
+                _cleanup_preprocessed_cache(item, paths)
                 continue
 
             state.append(
@@ -502,6 +562,7 @@ def _process_items(
                 result = future.result()
             except Exception as exc:  # noqa: BLE001
                 _handle_failure(item, state, "hash_failed", exc)
+                _cleanup_preprocessed_cache(item, paths)
                 continue
             hash_results[item.queue_id] = result
             state.append(
@@ -525,6 +586,7 @@ def _process_items(
                 result = future.result()
             except Exception as exc:  # noqa: BLE001
                 _handle_failure(item, state, "embedding_failed", exc)
+                _cleanup_preprocessed_cache(item, paths)
                 continue
             embed_results[item.queue_id] = result
             state.append(
@@ -560,6 +622,7 @@ def _process_items(
                         "ts": utc_now(),
                     }
                 )
+                _cleanup_preprocessed_cache(item, paths)
                 continue
 
             if config.dry_run:
@@ -579,6 +642,7 @@ def _process_items(
                 _update_database(sha_id, metadata, target_mp3, embedding_final)
             except Exception as exc:  # noqa: BLE001
                 _handle_failure(item, state, "finalize_failed", exc)
+                _cleanup_preprocessed_cache(item, paths)
                 continue
 
             acquisition_db.mark_status(
@@ -596,6 +660,7 @@ def _process_items(
                     "ts": utc_now(),
                 }
             )
+            _cleanup_preprocessed_cache(item, paths)
 
 
 def _parse_args() -> OrchestratorConfig:
@@ -721,6 +786,7 @@ def run_orchestrator(
     paths: PipelinePaths | None = None,
 ) -> None:
     dependencies.ensure_first_run_dependencies()
+    preflight_dependencies()
     paths = paths or PipelinePaths.default()
     _ensure_directories(paths)
 
@@ -737,6 +803,7 @@ def run_orchestrator(
             workers=config.download_workers,
             sources_file=config.sources_file,
             output_dir=paths.preprocessed_cache_dir,
+            seed_sources=False,
         )
         print(
             "Download results: "
