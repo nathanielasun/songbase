@@ -9,11 +9,6 @@ import sys
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-METADATA_ROOT = Path(os.environ.get("SONGBASE_METADATA_DIR", REPO_ROOT / ".metadata"))
-BASE_DIR = METADATA_ROOT / "postgres"
-DATA_DIR = BASE_DIR / "data"
-RUN_DIR = BASE_DIR / "run"
-LOG_PATH = BASE_DIR / "postgres.log"
 
 DEFAULT_PORT = 5433
 DEFAULT_METADATA_DB = "songbase_metadata"
@@ -36,6 +31,38 @@ except ImportError:
     except ImportError:
         python_bootstrap = None
 
+try:
+    from backend import app_settings
+except ImportError:
+    app_settings = None
+
+
+def _metadata_root() -> Path:
+    override = os.environ.get("SONGBASE_METADATA_DIR")
+    if override:
+        return Path(override).expanduser()
+    if app_settings:
+        return app_settings.resolve_paths().get(
+            "metadata_dir", REPO_ROOT / ".metadata"
+        )
+    return REPO_ROOT / ".metadata"
+
+
+def _base_dir() -> Path:
+    return _metadata_root() / "postgres"
+
+
+def _data_dir() -> Path:
+    return _base_dir() / "data"
+
+
+def _run_dir() -> Path:
+    return _base_dir() / "run"
+
+
+def _log_path() -> Path:
+    return _base_dir() / "postgres.log"
+
 
 def _local_user() -> str:
     return os.environ.get("SONGBASE_LOCAL_DB_USER", getpass.getuser())
@@ -54,12 +81,12 @@ def _image_db() -> str:
 
 
 def _metadata_url() -> str:
-    host = RUN_DIR.as_posix()
+    host = _run_dir().as_posix()
     return f"postgresql://{_local_user()}@/{_metadata_db()}?host={host}&port={_port()}"
 
 
 def _image_url() -> str:
-    host = RUN_DIR.as_posix()
+    host = _run_dir().as_posix()
     return f"postgresql://{_local_user()}@/{_image_db()}?host={host}&port={_port()}"
 
 
@@ -112,10 +139,10 @@ def _run(cmd: list[str], env: dict | None = None, check: bool = True) -> subproc
 
 
 def _pg_ctl_status(pg_ctl: str) -> bool:
-    if not DATA_DIR.exists():
+    if not _data_dir().exists():
         return False
     result = subprocess.run(
-        [pg_ctl, "-D", str(DATA_DIR), "status"],
+        [pg_ctl, "-D", str(_data_dir()), "status"],
         check=False,
         text=True,
         capture_output=True,
@@ -124,15 +151,16 @@ def _pg_ctl_status(pg_ctl: str) -> bool:
 
 
 def init_cluster(initdb: str) -> bool:
-    if DATA_DIR.exists() and (DATA_DIR / "PG_VERSION").exists():
+    data_dir = _data_dir()
+    if data_dir.exists() and (data_dir / "PG_VERSION").exists():
         return False
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    _run_dir().mkdir(parents=True, exist_ok=True)
     _run(
         [
             initdb,
             "-D",
-            str(DATA_DIR),
+            str(data_dir),
             "-A",
             "trust",
             "-U",
@@ -145,16 +173,18 @@ def init_cluster(initdb: str) -> bool:
 def start_cluster(pg_ctl: str) -> None:
     if _pg_ctl_status(pg_ctl):
         return
-    RUN_DIR.mkdir(parents=True, exist_ok=True)
-    LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    options = f"-k {RUN_DIR} -p {_port()}"
+    run_dir = _run_dir()
+    log_path = _log_path()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    options = f"-k {run_dir} -p {_port()}"
     _run(
         [
             pg_ctl,
             "-D",
-            str(DATA_DIR),
+            str(_data_dir()),
             "-l",
-            str(LOG_PATH),
+            str(log_path),
             "-o",
             options,
             "-w",
@@ -166,7 +196,7 @@ def start_cluster(pg_ctl: str) -> None:
 def stop_cluster(pg_ctl: str) -> None:
     if not _pg_ctl_status(pg_ctl):
         return
-    _run([pg_ctl, "-D", str(DATA_DIR), "stop"])
+    _run([pg_ctl, "-D", str(_data_dir()), "stop"])
 
 
 def _db_exists(psql: str, db_name: str) -> bool:
@@ -174,7 +204,7 @@ def _db_exists(psql: str, db_name: str) -> bool:
         [
             psql,
             "-h",
-            str(RUN_DIR),
+            str(_run_dir()),
             "-p",
             str(_port()),
             "-U",
@@ -196,7 +226,7 @@ def _ensure_database(createdb: str, psql: str, db_name: str) -> None:
         [
             createdb,
             "-h",
-            str(RUN_DIR),
+            str(_run_dir()),
             "-p",
             str(_port()),
             "-U",

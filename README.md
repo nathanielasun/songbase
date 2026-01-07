@@ -10,7 +10,7 @@ A platform for users to curate their own personalized music streaming platform
 ## Prerequisites
 
 - **Node.js** 18+ and npm
-- **Python** 3.8+
+- **Python** 3.11+ (3.12 recommended)
 - **ffmpeg** for audio processing (MP3→PCM WAV conversion)
 
 Install ffmpeg:
@@ -52,7 +52,7 @@ cd ..
 
 Terminal 1 - Backend API:
 ```bash
-uvicorn backend.api.app:app --reload --port 8000
+./scripts/use_local_python.sh -m uvicorn backend.api.app:app --reload --port 8000
 ```
 
 Terminal 2 - Frontend:
@@ -96,6 +96,13 @@ songbase/
 
 The frontend proxies API requests to the backend automatically. API calls to `/api/*` from the frontend are forwarded to `http://localhost:8000/api/*`.
 
+## Library Management UI
+
+- **Your Library** (`/library`): Queue songs, monitor download and processing status, and inspect database statistics.
+- **Settings** (`/settings`): Configure batch sizes, worker defaults, and storage paths (applies on next pipeline run or backend restart).
+
+When the backend starts and database URLs are missing, it will automatically bootstrap the local Postgres cluster under `.metadata/`.
+
 ## Local Python Runner
 
 Use the local Python wrapper to ensure commands resolve the project modules and run inside `.venv`:
@@ -106,6 +113,8 @@ Use the local Python wrapper to ensure commands resolve the project modules and 
 ```
 
 The `backend.processing.run_pipeline` entrypoint installs Python dependencies on first run using `backend/api/requirements.txt`. To install offline, set `SONGBASE_WHEELHOUSE_DIR` to a local wheelhouse.
+
+If the wrapper selects an unsupported Python version, override it with `PYTHON_BIN=python3.12`.
 
 ## Processing Orchestrator
 

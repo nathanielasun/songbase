@@ -1,20 +1,26 @@
 #!/bin/bash
+set -euo pipefail
 
 # Development startup script for Songbase
 # Starts both frontend (Next.js) and backend (FastAPI) servers
 
 echo "Starting Songbase development servers..."
 
-cd "$(dirname "$0")"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PY_RUN="${ROOT_DIR}/scripts/use_local_python.sh"
 
-if [ -z "$SONGBASE_DATABASE_URL" ] || [ -z "$SONGBASE_IMAGE_DATABASE_URL" ]; then
-  eval "$(python3 backend/db/local_postgres.py env)"
+cd "${ROOT_DIR}"
+
+"${PY_RUN}" -m backend.bootstrap
+
+if [ -z "${SONGBASE_DATABASE_URL:-}" ] || [ -z "${SONGBASE_IMAGE_DATABASE_URL:-}" ]; then
+  "${PY_RUN}" -m backend.db.local_postgres ensure
+  eval "$("${PY_RUN}" -m backend.db.local_postgres env)"
 fi
-python3 backend/db/local_postgres.py ensure
 
 # Start backend API server
 echo "Starting FastAPI backend on http://localhost:8000"
-uvicorn backend.api.app:app --reload --port 8000 &
+"${PY_RUN}" -m uvicorn backend.api.app:app --reload --port 8000 &
 BACKEND_PID=$!
 
 # Start frontend Next.js server

@@ -81,10 +81,16 @@ input[type='range'].volume-slider {
   appearance: none;
   background: transparent;
   cursor: pointer;
+  width: 100%;
+  height: 4px;
 }
 
-input[type='range'].volume-slider::-webkit-slider-track {
-  background: #4b5563;
+input[type='range'].volume-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+    #ec4899 0%,
+    #ec4899 var(--volume-width, 0%),
+    #4b5563 var(--volume-width, 0%),
+    #4b5563 100%);
   height: 4px;
   border-radius: 2px;
 }
@@ -95,32 +101,92 @@ input[type='range'].volume-slider::-moz-range-track {
   border-radius: 2px;
 }
 
+input[type='range'].volume-slider::-moz-range-progress {
+  background: #ec4899;
+  height: 4px;
+  border-radius: 2px;
+}
+
 input[type='range'].volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
-  background: #ec4899;
+  background: white;
   height: 12px;
   width: 12px;
   border-radius: 50%;
   margin-top: -4px;
-  transition: background 0.2s;
-}
-
-input[type='range'].volume-slider:hover::-webkit-slider-thumb {
-  background: #db2777;
+  transition: opacity 0.2s;
 }
 
 input[type='range'].volume-slider::-moz-range-thumb {
-  background: #ec4899;
+  background: white;
   height: 12px;
   width: 12px;
   border-radius: 50%;
   border: none;
-  transition: background 0.2s;
+  transition: opacity 0.2s;
 }
 
-input[type='range'].volume-slider:hover::-moz-range-thumb {
-  background: #db2777;
+/* Progress Slider - Hot Pink */
+input[type='range'].progress-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  cursor: pointer;
+  width: 100%;
+  height: 4px;
+}
+
+input[type='range'].progress-slider::-webkit-slider-runnable-track {
+  background: linear-gradient(to right,
+    #ec4899 0%,
+    #ec4899 var(--progress-width, 0%),
+    #4b5563 var(--progress-width, 0%),
+    #4b5563 100%);
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type='range'].progress-slider::-moz-range-track {
+  background: #4b5563;
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type='range'].progress-slider::-moz-range-progress {
+  background: #ec4899;
+  height: 4px;
+  border-radius: 2px;
+}
+
+input[type='range'].progress-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  background: white;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  margin-top: -4px;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+input[type='range'].progress-slider:hover::-webkit-slider-thumb {
+  opacity: 1;
+}
+
+input[type='range'].progress-slider::-moz-range-thumb {
+  background: white;
+  height: 12px;
+  width: 12px;
+  border-radius: 50%;
+  border: none;
+  opacity: 0;
+  transition: opacity 0.2s;
+}
+
+input[type='range'].progress-slider:hover::-moz-range-thumb {
+  opacity: 1;
 }
 
 /* Scrollbar Styling */

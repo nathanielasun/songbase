@@ -47,15 +47,24 @@ class PipelinePaths:
 
     @classmethod
     def default(cls) -> "PipelinePaths":
+        return cls.from_overrides()
+
+    @classmethod
+    def from_overrides(
+        cls,
+        preprocessed_cache_dir: Path | None = None,
+        song_cache_dir: Path | None = None,
+    ) -> "PipelinePaths":
         repo_root = acquisition_config.REPO_ROOT
-        preprocessed = acquisition_config.PREPROCESSED_CACHE_DIR
+        preprocessed = preprocessed_cache_dir or acquisition_config.PREPROCESSED_CACHE_DIR
+        song_cache = song_cache_dir or repo_root / ".song_cache"
         return cls(
             repo_root=repo_root,
             preprocessed_cache_dir=preprocessed,
             pcm_raw_dir=preprocessed / "pcm_raw",
             pcm_norm_dir=preprocessed / "pcm_norm",
             embedding_dir=preprocessed / "embeddings",
-            song_cache_dir=repo_root / ".song_cache",
+            song_cache_dir=song_cache,
             pipeline_state_path=preprocessed / "pipeline_state.jsonl",
         )
 
@@ -706,9 +715,13 @@ def _parse_args() -> OrchestratorConfig:
     )
 
 
-def run_orchestrator(config: OrchestratorConfig) -> None:
+def run_orchestrator(
+    config: OrchestratorConfig,
+    *,
+    paths: PipelinePaths | None = None,
+) -> None:
     dependencies.ensure_first_run_dependencies()
-    paths = PipelinePaths.default()
+    paths = paths or PipelinePaths.default()
     _ensure_directories(paths)
 
     state = StateWriter(paths.pipeline_state_path)

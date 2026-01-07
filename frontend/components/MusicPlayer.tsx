@@ -55,7 +55,6 @@ export default function MusicPlayer({
   const [currentTime, setCurrentTime] = useState(0);
   const [volume, setVolume] = useState(70);
   const [isMuted, setIsMuted] = useState(false);
-  const progressRef = useRef<HTMLDivElement>(null);
   const onSongEndRef = useRef(onSongEnd);
 
   const duration = currentSong?.duration || 0;
@@ -85,12 +84,10 @@ export default function MusicPlayer({
     }
   }, [isPlaying, currentSong, duration]);
 
-  const handleProgressClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!progressRef.current || !currentSong) return;
-    const bounds = progressRef.current.getBoundingClientRect();
-    const x = e.clientX - bounds.left;
-    const percentage = x / bounds.width;
-    setCurrentTime(Math.floor(percentage * duration));
+  const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!currentSong) return;
+    const newTime = parseInt(e.target.value);
+    setCurrentTime(newTime);
   };
 
   const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -253,18 +250,15 @@ export default function MusicPlayer({
           <span className="text-xs text-gray-400 w-10 text-right">
             {formatDuration(Math.floor(currentTime))}
           </span>
-          <div
-            ref={progressRef}
-            onClick={handleProgressClick}
-            className="flex-1 h-1 bg-gray-700 rounded-full cursor-pointer group"
-          >
-            <div
-              className="h-full bg-white rounded-full relative group-hover:bg-pink-500 transition-colors"
-              style={{ width: `${progress}%` }}
-            >
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 w-3 h-3 bg-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity" />
-            </div>
-          </div>
+          <input
+            type="range"
+            min="0"
+            max={duration}
+            value={Math.floor(currentTime)}
+            onChange={handleProgressChange}
+            className="flex-1 progress-slider"
+            style={{ '--progress-width': `${progress}%` } as React.CSSProperties}
+          />
           <span className="text-xs text-gray-400 w-10">
             {formatDuration(duration)}
           </span>

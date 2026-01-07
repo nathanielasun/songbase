@@ -1,7 +1,10 @@
+import os
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api.routes import songs, processing, library
+from backend.api.routes import songs, processing, library, settings
 from backend.processing import dependencies
+from backend.db import local_postgres
 
 app = FastAPI(
     title="Songbase API",
@@ -20,9 +23,18 @@ app.add_middleware(
 app.include_router(songs.router, prefix="/api/songs", tags=["songs"])
 app.include_router(processing.router, prefix="/api/processing", tags=["processing"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
+app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
 
 @app.on_event("startup")
 async def ensure_runtime_dependencies() -> None:
+    if not os.environ.get("SONGBASE_DATABASE_URL") or not os.environ.get(
+        "SONGBASE_IMAGE_DATABASE_URL"
+    ):
+        local_postgres.ensure_cluster()
+        os.environ.setdefault("SONGBASE_DATABASE_URL", local_postgres.metadata_url())
+        os.environ.setdefault(
+            "SONGBASE_IMAGE_DATABASE_URL", local_postgres.image_url()
+        )
     dependencies.ensure_first_run_dependencies()
 
 @app.get("/")

@@ -7,7 +7,11 @@ songbase/
 ├── frontend/           # Next.js TypeScript frontend
 │   ├── app/           # Next.js app router
 │   │   ├── layout.tsx # Root layout component
-│   │   └── page.tsx   # Home page
+│   │   ├── page.tsx   # Home page
+│   │   ├── library/
+│   │   │   └── page.tsx # Library management UI
+│   │   └── settings/
+│   │       └── page.tsx # Pipeline + storage settings UI
 │   ├── public/        # Static assets
 │   ├── next.config.ts # Next.js configuration (API proxy)
 │   ├── package.json   # Frontend dependencies
@@ -17,10 +21,12 @@ songbase/
 │   │   ├── routes/
 │   │   │   ├── songs.py      - Song listing and retrieval endpoints
 │   │   │   ├── processing.py - Audio processing endpoints
-│   │   │   └── library.py    - Metadata + embedding ingestion endpoints
+│   │   │   ├── library.py    - Metadata + queue + pipeline endpoints
+│   │   │   └── settings.py   - Settings read/write endpoints
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
 │   ├── bootstrap.py     - Python dependency bootstrapper
+│   ├── app_settings.py  - Persistent UI settings stored under .metadata
 │   ├── db/            # Postgres schema + ingestion tools
 │   │   ├── migrations/
 │   │   │   ├── 001_init.sql  - Metadata + embeddings schema with pgvector
@@ -111,6 +117,14 @@ songbase/
   - API proxy rewrites: `/api/*` → `http://localhost:8000/api/*`
   - Enables seamless frontend-backend communication in development
 
+### frontend/app/library/page.tsx
+- **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
+- **Uses**: `/api/library/queue`, `/api/library/stats`, `/api/library/pipeline/status`
+
+### frontend/app/settings/page.tsx
+- **Purpose**: Settings UI for batch sizes and storage paths.
+- **Uses**: `/api/settings`
+
 ### Usage Examples
 
 **Fetching songs from the frontend**:
@@ -139,7 +153,8 @@ try {
   - CORS middleware (allows requests from http://localhost:3000)
   - Auto-generated OpenAPI docs at `/docs`
   - Health check endpoint at `/health`
-  - Routes organized by domain (songs, processing)
+  - Routes organized by domain (songs, processing, library, settings)
+  - Auto-bootstraps local Postgres if database URLs are missing
 
 ### backend/api/routes/songs.py
 - **Purpose**: Song management endpoints
@@ -174,6 +189,37 @@ try {
   - `POST /api/library/ingest`: Ingest MP3 metadata and optional embeddings
   - `GET /api/library/songs`: List songs in the metadata DB
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
+  - `POST /api/library/queue`: Queue songs for acquisition (accepts a list of titles)
+  - `GET /api/library/queue`: View download queue status
+  - `GET /api/library/stats`: Database + queue metrics
+  - `POST /api/library/pipeline/run`: Start a processing pipeline run
+  - `GET /api/library/pipeline/status`: Fetch pipeline status + recent events
+- **Usage**:
+  ```bash
+  curl -X POST http://localhost:8000/api/library/queue \
+    -H "Content-Type: application/json" \
+    -d '{"items":[{"title":"Artist - Track","search_query":"Artist - Track"}]}'
+
+  curl http://localhost:8000/api/library/pipeline/status
+  ```
+
+### backend/api/routes/settings.py
+- **Purpose**: Persist UI settings for pipeline defaults and storage paths
+- **Endpoints**:
+  - `GET /api/settings`: Fetch stored settings
+  - `PUT /api/settings`: Update settings (pipeline + paths)
+- **Usage**:
+  ```bash
+  curl http://localhost:8000/api/settings
+
+  curl -X PUT http://localhost:8000/api/settings \
+    -H "Content-Type: application/json" \
+    -d '{"pipeline":{"process_limit":8},"paths":{"preprocessed_cache_dir":"./preprocessed_cache"}}'
+  ```
+
+### backend/app_settings.py
+- **Purpose**: Load/store UI settings under `.metadata/settings.json`
+- **Used By**: `/api/settings`, pipeline runner (default batch sizes and paths)
 
 ## Backend DB (Postgres + pgvector)
 
@@ -344,6 +390,8 @@ Use the wrapper to ensure local module resolution and a `.venv` Python interpret
 
 `backend.processing.run_pipeline` installs Python dependencies on first run (using `backend/api/requirements.txt`). To install offline, set `SONGBASE_WHEELHOUSE_DIR` to a local wheelhouse directory.
 
+If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12` before running it.
+
 ## Testing
 
 ### backend/tests/test_orchestrator_integration.py
@@ -422,6 +470,7 @@ Use the wrapper to ensure local module resolution and a `.venv` Python interpret
   - FastAPI backend on http://localhost:8000
   - Next.js frontend on http://localhost:3000
 - **Features**: Automatic cleanup on Ctrl+C
+ - **Notes**: Uses the local Python wrapper to create a `.venv`, install dependencies, and bootstrap local Postgres when database URLs are missing.
 
 ## API Development
 
