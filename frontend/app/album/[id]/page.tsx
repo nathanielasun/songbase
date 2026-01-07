@@ -1,23 +1,21 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { mockAlbums, mockSongs, formatDate, getTotalDuration, formatDuration } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
+import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 
 export default function AlbumPage() {
   const params = useParams();
   const albumId = params.id as string;
+  const { currentSong, isPlaying, playSong } = useMusicPlayer();
 
   const album = mockAlbums.find((a) => a.id === albumId);
   const albumSongs = mockSongs.filter((song) => song.albumId === albumId);
-
-  const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
 
   if (!album) {
     return (
@@ -37,12 +35,7 @@ export default function AlbumPage() {
   const totalSeconds = totalDuration % 60;
 
   const handleSongClick = (song: Song) => {
-    if (currentSong?.id === song.id) {
-      setIsPlaying(!isPlaying);
-    } else {
-      setCurrentSong(song);
-      setIsPlaying(true);
-    }
+    playSong(song, albumSongs);
   };
 
   const handleDownloadAlbum = () => {

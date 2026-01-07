@@ -8,17 +8,17 @@ import { PlayIcon } from '@heroicons/react/24/solid';
 import { mockSongs, mockArtists, mockAlbums, mockPlaylists } from '@/lib/mockData';
 import { Song, Artist, Album, Playlist } from '@/lib/types';
 import SongList from '@/components/SongList';
+import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 
 type SearchCategory = 'all' | 'songs' | 'artists' | 'albums' | 'playlists';
 type SortOption = 'relevance' | 'alphabetical' | 'recent';
 
 export default function SearchPage() {
+  const { currentSong, isPlaying, playSong } = useMusicPlayer();
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<SearchCategory>('all');
   const [selectedGenres, setSelectedGenres] = useState<string[]>([]);
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
-  const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
 
   // Extract all unique genres
   const allGenres = useMemo(() => {
@@ -100,12 +100,7 @@ export default function SearchPage() {
   };
 
   const handleSongClick = (song: Song) => {
-    if (currentSong?.id === song.id) {
-      setIsPlaying(!isPlaying);
-    } else {
-      setCurrentSong(song);
-      setIsPlaying(true);
-    }
+    playSong(song, mockSongs);
   };
 
   const handleDownloadSong = (song: Song) => {

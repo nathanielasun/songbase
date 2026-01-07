@@ -1,21 +1,20 @@
 'use client';
 
 import { useParams } from 'next/navigation';
-import { useState } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeftIcon, PlayIcon, ClockIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
 import { mockPlaylists, mockSongs, formatDuration, formatDate, getTotalDuration } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
+import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 
 export default function PlaylistPage() {
   const params = useParams();
   const playlistId = params.id as string;
+  const { currentSong, isPlaying, playSong } = useMusicPlayer();
 
   const playlist = mockPlaylists.find((p) => p.id === playlistId);
-  const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
 
   if (!playlist) {
     return (
@@ -35,12 +34,7 @@ export default function PlaylistPage() {
   const totalMinutes = Math.floor(totalDuration / 60);
 
   const handleSongClick = (song: Song) => {
-    if (currentSong?.id === song.id) {
-      setIsPlaying(!isPlaying);
-    } else {
-      setCurrentSong(song);
-      setIsPlaying(true);
-    }
+    playSong(song, playlist.songs);
   };
 
   const handleDownloadPlaylist = () => {

@@ -8,10 +8,12 @@ import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/
 import { mockArtists, mockAlbums, mockSongs, formatDate } from '@/lib/mockData';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
+import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 
 export default function ArtistPage() {
   const params = useParams();
   const artistId = params.id as string;
+  const { currentSong, isPlaying, playSong } = useMusicPlayer();
 
   const artist = mockArtists.find((a) => a.id === artistId);
   const artistAlbums = mockAlbums.filter((album) => album.artistId === artistId);
@@ -21,8 +23,6 @@ export default function ArtistPage() {
   const eps = artistAlbums.filter((album) => album.type === 'ep');
   const singles = artistAlbums.filter((album) => album.type === 'single');
 
-  const [currentSong, setCurrentSong] = useState<Song | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [activeTab, setActiveTab] = useState<'all' | 'albums' | 'eps'>('all');
 
   if (!artist) {
@@ -39,12 +39,7 @@ export default function ArtistPage() {
   }
 
   const handleSongClick = (song: Song) => {
-    if (currentSong?.id === song.id) {
-      setIsPlaying(!isPlaying);
-    } else {
-      setCurrentSong(song);
-      setIsPlaying(true);
-    }
+    playSong(song, artistSongs);
   };
 
   const handleDownloadAlbum = (albumId: string, albumTitle: string) => {

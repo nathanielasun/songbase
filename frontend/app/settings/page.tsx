@@ -2,8 +2,6 @@
 
 import { useEffect, useState } from 'react';
 import { Cog8ToothIcon, FolderIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
-import Sidebar from '@/components/Sidebar';
-import { mockPlaylists } from '@/lib/mockData';
 
 type SettingsPayload = {
   pipeline: {
@@ -146,11 +144,8 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="h-screen flex flex-col bg-black text-white">
-      <div className="flex-1 flex overflow-hidden">
-        <Sidebar playlists={mockPlaylists} onCreatePlaylist={() => {}} />
-
-        <main className="flex-1 overflow-auto bg-gradient-to-b from-gray-900 to-black">
+    <div className="bg-gradient-to-b from-gray-900 to-black min-h-full pb-32">
+      <div>
           <div className="p-8 pb-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div>
@@ -316,7 +311,6 @@ export default function SettingsPage() {
               </p>
             </section>
           </div>
-        </main>
       </div>
     </div>
   );
