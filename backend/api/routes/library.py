@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import difflib
 import hashlib
 import json
+import re
 import string
 import threading
 from collections import deque
@@ -10,7 +12,7 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from pydantic import BaseModel
 
@@ -20,6 +22,7 @@ from backend.db.image_connection import get_image_connection
 from backend.db.ingest import collect_mp3_files, ingest_paths
 from backend.processing import orchestrator
 from backend.processing.acquisition_pipeline import config as acquisition_config
+from backend.processing.acquisition_pipeline import importer as acquisition_importer
 from backend.processing.acquisition_pipeline import sources as acquisition_sources
 from backend.processing.audio_pipeline import config as vggish_config
 from backend.processing.metadata_pipeline.image_pipeline import sync_images_and_profiles
@@ -87,6 +90,15 @@ class LinkSongsRequest(BaseModel):
     album_id: str
     sha_ids: list[str]
     mark_verified: bool = True
+
+
+class SongUpdateRequest(BaseModel):
+    title: str | None = None
+    artist: str | None = None
+    album: str | None = None
+    genre: str | None = None
+    release_year: int | None = None
+    track_number: int | None = None
 
 
 class CatalogEntry(BaseModel):
@@ -235,6 +247,262 @@ def _ensure_artist(cur, name: str | None) -> int | None:
         (name,),
     )
     return cur.fetchone()[0]
+
+
+def _ensure_genre(cur, name: str) -> int:
+    cur.execute(
+        """
+        INSERT INTO metadata.genres (name)
+        VALUES (%s)
+        ON CONFLICT (name)
+        DO UPDATE SET name = EXCLUDED.name
+        RETURNING genre_id
+        """,
+        (name,),
+    )
+    return cur.fetchone()[0]
+
+
+def _normalize_text(value: str | None) -> str:
+    if not value:
+        return ""
+    lowered = value.lower()
+    lowered = re.sub(r"\([^)]*\)", " ", lowered)
+    lowered = re.sub(r"\[[^\]]*\]", " ", lowered)
+    lowered = re.sub(r"\{[^}]*\}", " ", lowered)
+    lowered = re.sub(r"\b(feat|featuring|ft)\.?\b.*", " ", lowered)
+    lowered = re.sub(r"[^\w\s]", " ", lowered)
+    return " ".join(lowered.split()).strip()
+
+
+def _similarity(a: str, b: str) -> float:
+    if not a or not b:
+        return 0.0
+    return difflib.SequenceMatcher(None, a, b).ratio()
+
+
+def _clean_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed if trimmed else None
+
+
+def _parse_names(value: str | None) -> list[str]:
+    cleaned = _clean_text(value)
+    if not cleaned:
+        return []
+    return [part.strip() for part in re.split(r"[;,]", cleaned) if part.strip()]
+
+
+def _resolve_artist_match(cur, name: str) -> tuple[int, str] | None:
+    cleaned = _clean_text(name)
+    if not cleaned:
+        return None
+    cur.execute(
+        "SELECT artist_id, name FROM metadata.artists WHERE lower(name) = lower(%s) LIMIT 1",
+        (cleaned,),
+    )
+    row = cur.fetchone()
+    if row:
+        return row[0], row[1]
+
+    tokens = _normalize_text(cleaned).split()
+    if not tokens:
+        return None
+    cur.execute(
+        "SELECT artist_id, name FROM metadata.artists WHERE name ILIKE %s LIMIT 25",
+        (f"%{tokens[0]}%",),
+    )
+    candidates = cur.fetchall()
+    best: tuple[int, str] | None = None
+    best_score = 0.0
+    for artist_id, artist_name in candidates:
+        score = _similarity(_normalize_text(cleaned), _normalize_text(artist_name))
+        if score > best_score:
+            best_score = score
+            best = (artist_id, artist_name)
+    if best and best_score >= 0.82:
+        return best
+    return None
+
+
+def _resolve_album_match(
+    cur,
+    title: str,
+    artist_name: str | None,
+) -> dict[str, Any] | None:
+    cleaned_title = _clean_text(title)
+    if not cleaned_title:
+        return None
+    params: list[Any] = [cleaned_title]
+    where_clause = "lower(title) = lower(%s)"
+    if artist_name:
+        where_clause += " AND lower(artist_name) = lower(%s)"
+        params.append(artist_name)
+    cur.execute(
+        f"""
+        SELECT album_id, title, artist_name, release_year, release_date
+        FROM metadata.albums
+        WHERE {where_clause}
+        LIMIT 1
+        """,
+        params,
+    )
+    row = cur.fetchone()
+    if row:
+        return {
+            "album_id": row[0],
+            "title": row[1],
+            "artist_name": row[2],
+            "release_year": row[3],
+            "release_date": row[4],
+        }
+
+    cur.execute(
+        """
+        SELECT album_id, title, artist_name, release_year, release_date
+        FROM metadata.albums
+        WHERE title ILIKE %s
+        LIMIT 25
+        """,
+        (f"%{cleaned_title}%",),
+    )
+    candidates = cur.fetchall()
+    best: dict[str, Any] | None = None
+    best_score = 0.0
+    for album_id, candidate_title, candidate_artist, release_year, release_date in candidates:
+        title_score = _similarity(
+            _normalize_text(cleaned_title), _normalize_text(candidate_title)
+        )
+        artist_score = 1.0
+        if artist_name:
+            artist_score = _similarity(
+                _normalize_text(artist_name), _normalize_text(candidate_artist)
+            )
+        score = (title_score * 0.7) + (artist_score * 0.3)
+        if score > best_score:
+            best_score = score
+            best = {
+                "album_id": album_id,
+                "title": candidate_title,
+                "artist_name": candidate_artist,
+                "release_year": release_year,
+                "release_date": release_date,
+            }
+    if best and best_score >= 0.8:
+        return best
+    return None
+
+
+def _fetch_song_detail(sha_id: str) -> dict[str, Any] | None:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    s.sha_id,
+                    s.title,
+                    s.album,
+                    s.duration_sec,
+                    s.release_year,
+                    s.track_number,
+                    s.verified,
+                    s.verification_source,
+                    s.verification_score,
+                    s.musicbrainz_recording_id,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT a.name)
+                        FILTER (WHERE a.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT g.name)
+                        FILTER (WHERE g.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS genres,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT l.name)
+                        FILTER (WHERE l.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS labels,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT p.name)
+                        FILTER (WHERE p.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS producers,
+                    COALESCE(MAX(a_primary.artist_id), MAX(a.artist_id)) AS primary_artist_id,
+                    COALESCE(MAX(a_primary.name), MAX(a.name)) AS primary_artist_name
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                LEFT JOIN metadata.song_genres sg ON sg.sha_id = s.sha_id
+                LEFT JOIN metadata.genres g ON g.genre_id = sg.genre_id
+                LEFT JOIN metadata.song_labels sl ON sl.sha_id = s.sha_id
+                LEFT JOIN metadata.labels l ON l.label_id = sl.label_id
+                LEFT JOIN metadata.song_producers sp ON sp.sha_id = s.sha_id
+                LEFT JOIN metadata.producers p ON p.producer_id = sp.producer_id
+                WHERE s.sha_id = %s
+                GROUP BY s.sha_id
+                """,
+                (sha_id,),
+            )
+            row = cur.fetchone()
+
+            if not row:
+                return None
+
+            primary_artist_name = row[15]
+            fallback_artist = row[10][0] if row[10] else None
+            album_id = None
+            if row[2] and (primary_artist_name or fallback_artist):
+                album_id = _album_id(row[2], primary_artist_name or fallback_artist)
+            album_release_date = None
+            album_release_year = None
+            album_artist_name = None
+            if album_id:
+                cur.execute(
+                    """
+                    SELECT artist_name, release_year, release_date
+                    FROM metadata.albums
+                    WHERE album_id = %s
+                    """,
+                    (album_id,),
+                )
+                album_row = cur.fetchone()
+                if album_row:
+                    album_artist_name = album_row[0]
+                    album_release_year = album_row[1]
+                    album_release_date = album_row[2]
+                else:
+                    album_id = None
+
+    return {
+        "sha_id": row[0],
+        "title": row[1],
+        "album": row[2],
+        "duration_sec": row[3],
+        "release_year": row[4],
+        "track_number": row[5],
+        "verified": row[6],
+        "verification_source": row[7],
+        "verification_score": row[8],
+        "musicbrainz_recording_id": row[9],
+        "artists": row[10],
+        "genres": row[11],
+        "labels": row[12],
+        "producers": row[13],
+        "primary_artist_id": row[14],
+        "primary_artist_name": row[15],
+        "album_id": album_id,
+        "album_artist_name": album_artist_name,
+        "album_release_year": album_release_year,
+        "album_release_date": album_release_date,
+    }
 
 
 def _album_key_for_album_id(album_id: str) -> str | None:
@@ -1177,76 +1445,131 @@ async def list_unlinked_songs(limit: int = 50, offset: int = 0) -> dict[str, Any
 
 @router.get("/songs/{sha_id}")
 async def get_song(sha_id: str) -> dict[str, Any]:
+    detail = _fetch_song_detail(sha_id)
+    if not detail:
+        raise HTTPException(status_code=404, detail="Song not found.")
+    return detail
+
+
+@router.put("/songs/{sha_id}")
+async def update_song(sha_id: str, payload: SongUpdateRequest) -> dict[str, Any]:
+    sha_id = _normalize_sha_id(sha_id)
+    if not payload.model_fields_set:
+        raise HTTPException(status_code=400, detail="No updates provided.")
+
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT
-                    s.sha_id,
-                    s.title,
-                    s.album,
-                    s.duration_sec,
-                    s.release_year,
-                    s.track_number,
-                    s.verified,
-                    s.verification_source,
-                    s.verification_score,
-                    s.musicbrainz_recording_id,
-                    COALESCE(
-                        ARRAY_AGG(DISTINCT a.name)
-                        FILTER (WHERE a.name IS NOT NULL),
-                        ARRAY[]::TEXT[]
-                    ) AS artists,
-                    COALESCE(
-                        ARRAY_AGG(DISTINCT g.name)
-                        FILTER (WHERE g.name IS NOT NULL),
-                        ARRAY[]::TEXT[]
-                    ) AS genres,
-                    COALESCE(
-                        ARRAY_AGG(DISTINCT l.name)
-                        FILTER (WHERE l.name IS NOT NULL),
-                        ARRAY[]::TEXT[]
-                    ) AS labels,
-                    COALESCE(
-                        ARRAY_AGG(DISTINCT p.name)
-                        FILTER (WHERE p.name IS NOT NULL),
-                        ARRAY[]::TEXT[]
-                    ) AS producers
-                FROM metadata.songs s
-                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
-                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
-                LEFT JOIN metadata.song_genres sg ON sg.sha_id = s.sha_id
-                LEFT JOIN metadata.genres g ON g.genre_id = sg.genre_id
-                LEFT JOIN metadata.song_labels sl ON sl.sha_id = s.sha_id
-                LEFT JOIN metadata.labels l ON l.label_id = sl.label_id
-                LEFT JOIN metadata.song_producers sp ON sp.sha_id = s.sha_id
-                LEFT JOIN metadata.producers p ON p.producer_id = sp.producer_id
-                WHERE s.sha_id = %s
-                GROUP BY s.sha_id
+                SELECT title, album, release_year, track_number
+                FROM metadata.songs
+                WHERE sha_id = %s
                 """,
                 (sha_id,),
             )
             row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Song not found.")
 
-    if not row:
+            title_value = row[0]
+            album_value = row[1]
+            release_year_value = row[2]
+            track_number_value = row[3]
+
+            if "title" in payload.model_fields_set:
+                title_value = _clean_text(payload.title)
+
+            primary_artist_name = None
+            if "artist" in payload.model_fields_set:
+                artist_names = _parse_names(payload.artist)
+                cur.execute("DELETE FROM metadata.song_artists WHERE sha_id = %s", (sha_id,))
+                if artist_names:
+                    for index, artist_name in enumerate(artist_names):
+                        match = _resolve_artist_match(cur, artist_name)
+                        if match:
+                            artist_id, canonical_name = match
+                        else:
+                            artist_id = _ensure_artist(cur, artist_name)
+                            canonical_name = artist_name
+                        role = "primary" if index == 0 else "featured"
+                        cur.execute(
+                            """
+                            INSERT INTO metadata.song_artists (sha_id, artist_id, role)
+                            VALUES (%s, %s, %s)
+                            ON CONFLICT DO NOTHING
+                            """,
+                            (sha_id, artist_id, role),
+                        )
+                        if index == 0:
+                            primary_artist_name = canonical_name
+            else:
+                cur.execute(
+                    """
+                    SELECT a.name
+                    FROM metadata.song_artists sa
+                    JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                    WHERE sa.sha_id = %s AND sa.role = 'primary'
+                    ORDER BY a.artist_id
+                    LIMIT 1
+                    """,
+                    (sha_id,),
+                )
+                existing_artist = cur.fetchone()
+                primary_artist_name = existing_artist[0] if existing_artist else None
+
+            if "album" in payload.model_fields_set:
+                album_input = _clean_text(payload.album)
+                if album_input:
+                    album_match = _resolve_album_match(cur, album_input, primary_artist_name)
+                    album_value = album_match["title"] if album_match else album_input
+                else:
+                    album_value = None
+
+            if "release_year" in payload.model_fields_set:
+                release_year_value = payload.release_year
+
+            if "track_number" in payload.model_fields_set:
+                track_number_value = payload.track_number
+
+            if "genre" in payload.model_fields_set:
+                genre_names = _parse_names(payload.genre)
+                cur.execute("DELETE FROM metadata.song_genres WHERE sha_id = %s", (sha_id,))
+                for genre_name in genre_names:
+                    genre_id = _ensure_genre(cur, genre_name)
+                    cur.execute(
+                        """
+                        INSERT INTO metadata.song_genres (sha_id, genre_id)
+                        VALUES (%s, %s)
+                        ON CONFLICT DO NOTHING
+                        """,
+                        (sha_id, genre_id),
+                    )
+
+            cur.execute(
+                """
+                UPDATE metadata.songs
+                SET
+                    title = %s,
+                    album = %s,
+                    release_year = %s,
+                    track_number = %s,
+                    updated_at = NOW()
+                WHERE sha_id = %s
+                """,
+                (
+                    title_value,
+                    album_value,
+                    release_year_value,
+                    track_number_value,
+                    sha_id,
+                ),
+            )
+        conn.commit()
+
+    detail = _fetch_song_detail(sha_id)
+    if not detail:
         raise HTTPException(status_code=404, detail="Song not found.")
-
-    return {
-        "sha_id": row[0],
-        "title": row[1],
-        "album": row[2],
-        "duration_sec": row[3],
-        "release_year": row[4],
-        "track_number": row[5],
-        "verified": row[6],
-        "verification_source": row[7],
-        "verification_score": row[8],
-        "musicbrainz_recording_id": row[9],
-        "artists": row[10],
-        "genres": row[11],
-        "labels": row[12],
-        "producers": row[13],
-    }
+    return detail
 
 
 @router.post("/songs/link")
@@ -1447,6 +1770,53 @@ async def queue_songs(payload: QueueInsertRequest) -> dict[str, Any]:
         "requested": len(items),
         "queued": inserted,
         "appended_to_sources": payload.append_sources,
+    }
+
+
+@router.post("/import")
+async def import_local_files(
+    request: Request,
+    files: list[UploadFile] = File(...),
+) -> dict[str, Any]:
+    max_body_bytes = 5 * 1024 * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > max_body_bytes:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Max upload size reached (5GB).",
+                )
+        except ValueError:
+            pass
+    if not files:
+        raise HTTPException(status_code=400, detail="No files provided.")
+
+    settings = app_settings.load_settings()
+    paths = app_settings.resolve_paths(settings)
+    output_dir = paths["preprocessed_cache_dir"].resolve()
+
+    file_pairs: list[tuple[str, Any]] = []
+    for uploaded in files:
+        filename = uploaded.filename or "upload"
+        try:
+            uploaded.file.seek(0)
+        except Exception:  # noqa: BLE001
+            pass
+        file_pairs.append((filename, uploaded.file))
+
+    imported, failures = acquisition_importer.import_streams(file_pairs, output_dir)
+
+    for uploaded in files:
+        try:
+            await uploaded.close()
+        except Exception:  # noqa: BLE001
+            continue
+
+    return {
+        "queued": len(imported),
+        "imported": [asdict(item) for item in imported],
+        "failed": [asdict(item) for item in failures],
     }
 
 

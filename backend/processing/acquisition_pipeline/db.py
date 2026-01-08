@@ -255,3 +255,43 @@ def mark_batch(queue_ids: list[int], status: str) -> None:
                 (status, queue_ids),
             )
         conn.commit()
+
+
+def insert_import_item(
+    title: str,
+    artist: str | None,
+    album: str | None,
+    genre: str | None,
+    search_query: str | None,
+    source_url: str | None,
+    status: str,
+) -> int:
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO metadata.download_queue (
+                    title,
+                    artist,
+                    album,
+                    genre,
+                    search_query,
+                    source_url,
+                    status
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING queue_id
+                """,
+                (
+                    title,
+                    artist,
+                    album,
+                    genre,
+                    search_query,
+                    source_url,
+                    status,
+                ),
+            )
+            queue_id = cur.fetchone()[0]
+        conn.commit()
+    return queue_id

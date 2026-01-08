@@ -114,6 +114,7 @@ The verification pipeline now automatically fetches missing images during metada
      - "Back2Life (Official Music Video)" → tries original, then "Back2Life Music Video", then "Back2Life"
      - Handles: Official Video, Visualizer, Lyric Video, HD/HQ/4K, Live, Acoustic, Remastered, and many more
    - **Smart fallbacks**: If a search fails with extra qualifiers, automatically retries with progressively cleaner titles
+   - **Placeholder handling**: Ignores placeholder artists like "Unknown Artist" (or single stop-word artists) and merges them into title-only searches when helpful, cleaning underscores and label tags (e.g., Monstercat) along the way
 
 2. **Multi-Source Verification**: For each song, the pipeline tries all sources in sequence:
    - MusicBrainz (highest priority for accuracy)
@@ -150,6 +151,7 @@ songbase/
 ├── songs/             # Music library (MP3 files)
 ├── .metadata/         # Local Postgres data (ignored)
 ├── .song_cache/       # SHA-256 hashed song database
+├── .embeddings/       # VGGish embedding files (SHA-named .npz)
 └── STATUS/            # Project planning and status docs (see STATUS/processing-backend-plan.md)
 ```
 
@@ -161,9 +163,10 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 
 - **Your Library** (`/library`): Queue songs, monitor download and processing status, and inspect database statistics.
 - **Settings** (`/settings`): Configure batch sizes, worker defaults, and storage paths (applies on next pipeline run or backend restart).
-- **Reset controls**: Settings includes a confirmation-gated reset to clear embeddings and/or hashed music.
+- **Reset controls**: Settings includes a confirmation-gated reset to clear embeddings, hashed music, and artist/album data.
 - **Sync images default**: Image sync is enabled by default; toggle it in Settings or per-run in the pipeline form.
 - **Sources view**: The Downloads tab also shows entries from `backend/processing/acquisition_pipeline/sources.jsonl`.
+- **Acquisition backend management**: Configure and authenticate music acquisition backends (yt-dlp) via the UI with support for browser cookies to access age-restricted or member-only content.
 - **Queue de-dup**: Sources already queued move out of the sources list and appear only in the pipeline queue list.
 - **Automatic queue cleanup**: Songs are automatically removed from the queue once they reach "stored" or "duplicate" status to prevent duplication.
 - **Run until empty**: Optional checkbox on the pipeline form to automatically process batches until the queue is completely empty.
@@ -172,6 +175,9 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 - **Seed sources**: Use the Downloads tab to insert `sources.jsonl` entries into the queue.
 - **Last seed timestamp**: The Sources view displays when the queue was last seeded.
 - **Queue cleanup**: The Downloads tab includes confirmation-protected controls to clear sources.jsonl entries or the pipeline queue.
+- **Local import**: The Manage Music tab lets you upload audio/video files from your computer and enqueue them directly for conversion and processing.
+- **Large uploads**: The Next.js dev proxy allows up to 5GB per import request via `experimental.proxyClientMaxBodySize`.
+- **Song metadata editor**: The Database tab lists stored songs with a right-side panel to view and edit metadata, including artist/profile links.
 - **Album metadata sync**: Image/profile sync also caches album metadata + track lists for linking and browsing.
 - **Manual linking**: The Database tab lets you attach unassigned songs to existing album records.
 - **Artwork serving**: `/api/library/images/*` endpoints serve song, album, and artist artwork to the frontend.
@@ -197,9 +203,83 @@ For the backend API, prefer the bootstrap-aware entrypoint:
 ./scripts/use_local_python.sh -m backend.api.server --reload --port 8000
 ```
 
+## Acquisition Backend Configuration
+
+Songbase supports configuring acquisition backends for downloading music. Currently yt-dlp is supported with cookie-based authentication and intelligent format selection.
+
+### Intelligent Format Selection
+
+The acquisition pipeline automatically queries available formats for each download and intelligently selects the best option:
+
+- **Prefers audio-only formats** over video+audio to save bandwidth, storage, and conversion time
+- **Quality-aware selection**: Chooses the best audio quality up to 256kbps by default
+- **Automatic fallback**: Falls back to "bestaudio/best" if format selection fails
+- **Configurable**: Set `SONGBASE_YTDLP_PREFER_AUDIO_ONLY=0` to disable audio-only preference
+- **Quality limit**: Set `SONGBASE_YTDLP_MAX_AUDIO_QUALITY=320` to prefer higher quality audio (in kbps)
+
+This eliminates "Requested format is not available" errors by adapting to each video's available formats.
+
+### Browser Cookie Authentication
+
+To download age-restricted or member-only content, you can configure yt-dlp with your browser cookies:
+
+1. Navigate to `/library` → **Downloads** tab
+2. Expand the **Acquisition Backend** section
+3. Export cookies from your browser:
+   - **Chrome/Edge**: Install "Get cookies.txt LOCALLY" extension, visit YouTube (logged in), click extension, export
+   - **Firefox**: Install "cookies.txt" extension, visit YouTube (logged in), click extension, export
+4. Enter the **absolute path** to your cookies file (e.g., `/Users/you/.config/yt-dlp/cookies.txt`)
+   - You can use `~` which will be automatically expanded
+   - The system validates the file exists when you save
+5. Click **Save Configuration**
+6. Click **Test Connection** to verify the backend is working
+
+The acquisition pipeline will automatically use the configured cookies for all downloads.
+
+**Important Notes:**
+- Cookies expire after 1-2 weeks. If you see "Sign in to confirm you're not a bot" errors, re-export fresh cookies
+- Make sure you're logged into YouTube in your browser when exporting cookies
+- Use the absolute file path, not a relative path
+- The cookies are loaded dynamically, so no restart is needed after updating the configuration
+
+**Troubleshooting:**
+If downloads fail with bot detection errors:
+1. Export fresh cookies from your browser (make sure you're logged in)
+2. Verify the file path is correct and the file exists
+3. Click "Save Configuration" then "Test Connection" in the UI
+4. If still failing, try logging out of YouTube and back in, then re-export cookies
+
 ## Processing Orchestrator
 
-The processing orchestrator ties acquisition, PCM conversion, hashing, embeddings, and storage into one pipeline.
+The processing orchestrator ties acquisition, audio conversion, PCM conversion, hashing, embeddings, and storage into one pipeline.
+
+### Pipeline Stages
+
+1. **Acquisition** (`pending` → `downloading` → `downloaded` or `converting`)
+   - Downloads music from configured backends (yt-dlp)
+   - Detects format: videos (MP4, AVI, etc.) or audio (M4A, AAC, etc.)
+   - Video files and non-MP3 audio marked as `converting`
+   - Local file imports are inserted directly as `downloaded` or `converting`
+
+2. **Audio Conversion** (`converting` → `downloaded`)
+   - Converts video files to MP3 (extracts audio track)
+   - Converts other audio formats (M4A, AAC, FLAC, etc.) to MP3
+   - Uses ffmpeg with high quality settings (320kbps)
+   - Original files are deleted after successful conversion
+
+3. **PCM Conversion** (`downloaded` → `pcm_raw_ready`)
+   - Converts MP3 to PCM WAV format for processing
+
+4. **Hashing** (`pcm_raw_ready` → `hashed`)
+   - Creates normalized, de-duplicated hash of audio
+
+5. **Embedding** (`hashed` → `embedded`)
+   - Generates VGGish embeddings for similarity search
+
+6. **Storage** (`embedded` → `stored`)
+   - Stores final file in `.song_cache/` with metadata
+   - Item automatically removed from queue
+
 Embeddings and normalization require TensorFlow and resampy; the bootstrap installs them automatically on first run.
 VGGish also requires `tf_slim`, which is included in the bootstrap.
 Pipeline runs triggered from the UI do not auto-seed `sources.jsonl`; use the Seed button when needed.

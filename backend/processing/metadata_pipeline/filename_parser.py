@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -28,6 +29,9 @@ TITLE_QUALIFIERS = [
     r"\b(?:remix|extended|radio\s+edit|album\s+version|single\s+version)\b",
     r"\b(?:explicit|clean)\s+version\b",
 
+    # Label/series tags often appended to titles
+    r"\b(?:monstercat|dubstep)\b",
+
     # Common abbreviations
     r"\bM\s*V\b",
     r"\bMV\b",
@@ -49,27 +53,79 @@ class ParsedMetadata:
     confidence: float  # 0.0 to 1.0
 
 
+STOP_WORDS = {
+    "all", "and", "are", "ask", "but", "for", "from", "how", "if", "in", 
+    "is", "it", "of", "on", "or", "that", "the", "to", "what", "when", 
+    "where", "who", "why", "with", "you", "your", "unknown", "artist"
+}
+
+
+PLACEHOLDER_ARTISTS = {
+    "unknown artist",
+    "unknown",
+    "various artists",
+    "various",
+    "n/a",
+    "na",
+}
+
+
+def is_placeholder_artist(name: str | None) -> bool:
+    """Return True if the artist value is a placeholder or non-informative."""
+    if not name:
+        return True
+    cleaned = _clean_text(name).lower()
+    if not cleaned:
+        return True
+    if cleaned in PLACEHOLDER_ARTISTS:
+        return True
+    if cleaned.isdigit():
+        return True
+    tokens = [token for token in re.split(r"\s+", cleaned) if token]
+    if tokens and len(tokens) == 1 and tokens[0] in STOP_WORDS:
+        return True
+    return False
 def _clean_text(text: str) -> str:
     """Clean and normalize text by removing common artifacts."""
+    # Normalize unicode (e.g. half-width/full-width, accents)
+    text = unicodedata.normalize("NFKD", text)
+
     # Remove file extensions
     text = re.sub(r"\.(mp3|flac|wav|m4a|aac|ogg|opus|wma)$", "", text, flags=re.IGNORECASE)
-
-    # Remove common video suffixes
-    text = re.sub(r"\s*\b(M\s*V|MV|Music\s*Video|Official\s*Video|Official|Audio|Lyric\s*Video|HD|HQ|4K)\b\s*$", "", text, flags=re.IGNORECASE)
-
-    # Remove brackets and their content at the end (often quality/format tags)
-    text = re.sub(r"\s*[\[\(]([^\]\)]*(?:kbps|hz|bit|320|256|192|128|quality|rip|official|audio|video|lyric))[\]\)]\s*$", "", text, flags=re.IGNORECASE)
-
-    # Remove year patterns (4 digits in parentheses/brackets)
-    text = re.sub(r"\s*[\[\(]\d{4}[\]\)]\s*", " ", text)
-
-    # Remove featuring artists for title cleaning
-    text = re.sub(r"\s*[\[\(]?\s*(?:feat|featuring|ft)\.?\s+[^\]\)]*[\]\)]?\s*$", "", text, flags=re.IGNORECASE)
 
     # Clean up multiple spaces
     text = re.sub(r"\s+", " ", text).strip()
 
-    return text
+    # iteratively remove suffixes until no change
+    while True:
+        original = text
+
+        # Remove YouTube IDs (11 chars in brackets at end)
+        # e.g. [dQw4w9WgXcQ]
+        text = re.sub(r"\s*\[[a-zA-Z0-9_-]{11}\]\s*$", "", text)
+
+        # Remove common video suffixes at the end
+        # Handle variants with leading underscores or spaces
+        # e.g. " _Official_Visualizer", " Official Video"
+        text = re.sub(r"[\s_]*\b(M\s*V|MV|Music\s*Video|Official\s*Video|Official|Audio|Visualizer|Lyric\s*Video|Lyrics|Live|HD|HQ|4K|1080p|720p|Remaster(?:ed)?|Album\s*Version)\b[\s_]*$", "", text, flags=re.IGNORECASE)
+
+        # Remove brackets and their content at the end (often quality/format tags)
+        text = re.sub(r"\s*[\[\(]([^\]\)]*(?:kbps|hz|bit|320|256|192|128|quality|rip|official|audio|video|visualizer|lyric|live|hd|hq|4k|1080p|720p|remaster))[\]\)]\s*$", "", text, flags=re.IGNORECASE)
+
+        # Remove year patterns (4 digits in parentheses/brackets) at the end
+        text = re.sub(r"\s*[\[\(]\d{4}[\]\)]\s*$", "", text)
+
+        # Remove featuring artists for title cleaning (often at end)
+        text = re.sub(r"\s*[\[\(]?\s*(?:feat|featuring|ft)\.?\s+[^\]\)]*[\]\)]?\s*$", "", text, flags=re.IGNORECASE)
+        
+        text = text.strip()
+        # Clean leading/trailing underscores that might be left
+        text = text.strip("_")
+        
+        if text == original:
+            break
+
+    return text.strip()
 
 
 def _split_by_separator(text: str, separator: str) -> tuple[str, str] | None:
@@ -83,9 +139,13 @@ def _split_by_separator(text: str, separator: str) -> tuple[str, str] | None:
 
     left = parts[0].strip()
     right = parts[1].strip()
+    
+    # Clean leading/trailing underscores from parts (common in "Artist_ - _Title" patterns)
+    left = left.strip("_")
+    right = right.strip("_")
 
     # Validate both parts exist and aren't too short
-    if not left or not right or len(left) < 2 or len(right) < 2:
+    if not left or not right or len(left) < 1 or len(right) < 1:
         return None
 
     # Reject if either part is suspiciously long (likely not artist - title)
@@ -104,6 +164,15 @@ def _is_likely_artist_name(text: str) -> bool:
 
     if len(text) > 50:
         return False
+
+    if text.isdigit():
+        return False
+        
+    # If text is a single stop word (case insensitive), it's likely not an artist (e.g. "The", "All")
+    # But "The Who", "All Time Low" are valid. "All" (band) exists but causes issues.
+    if text.lower() in STOP_WORDS:
+        # We allow it, but we might flag it elsewhere or it will be penalized in confidence
+        pass
 
     # Check for patterns that suggest it's a title, not an artist
     title_patterns = [
@@ -148,10 +217,18 @@ def _extract_dash_pattern(filename: str) -> Iterator[ParsedMetadata]:
         # Check if artist looks reasonable
         if not _is_likely_artist_name(artist):
             continue
+            
+        # Replace underscores in artist/title if they exist (e.g. "Arctic_Monkeys")
+        artist = artist.replace("_", " ")
+        title = title.replace("_", " ")
 
         # Higher confidence for space-separated dashes
         confidence = 0.9 if separator.startswith(" ") else 0.7
-
+        
+        # Penalize if artist is a stop word or number
+        if artist.lower() in STOP_WORDS or artist.isdigit():
+            confidence = 0.4
+            
         yield ParsedMetadata(artist=artist, title=title, confidence=confidence)
 
 
@@ -159,28 +236,60 @@ def _extract_underscore_pattern(filename: str) -> Iterator[ParsedMetadata]:
     """
     Extract artist and title from "Artist_Title" pattern.
 
-    Some files use underscores instead of dashes.
+    Iterates through possible split points for underscores.
+    Example: "Wonder_girls_tellme" ->
+      1. Artist="Wonder", Title="girls tellme"
+      2. Artist="Wonder girls", Title="tellme"
     """
     cleaned = _clean_text(filename)
 
     if "_" not in cleaned:
         return
 
-    result = _split_by_separator(cleaned, "_")
-    if not result:
+    # Split by underscore
+    parts = cleaned.split("_")
+    
+    # Needs at least 2 parts to split into Artist + Title
+    if len(parts) < 2:
         return
 
-    artist, title = result
-    artist = _clean_text(artist)
-    title = _clean_text(title)
+    # Iterate through split points
+    # We allow the artist to be up to N-1 parts (leaving at least 1 part for title)
+    # We limit to first 3 splits to avoid excessive combinations for very long filenames
+    max_splits = min(len(parts), 4)
+    
+    for i in range(1, max_splits):
+        artist_parts = parts[:i]
+        title_parts = parts[i:]
+        
+        artist = " ".join(artist_parts).strip()
+        title = " ".join(title_parts).strip()
+        
+        if not artist or not title:
+            continue
 
-    if not artist or not title:
-        return
+        if not _is_likely_artist_name(artist):
+            continue
 
-    if not _is_likely_artist_name(artist):
-        return
+        # Determine confidence
+        # Heuristic: 
+        # - Capitalized artist preferred? 
+        # - Earlier splits preferred?
+        
+        is_capitalized = artist[0].isupper() if artist else False
+        
+        # Base confidence
+        confidence = 0.55
+        
+        # Boost slightly if capitalized
+        if is_capitalized:
+            confidence += 0.05
+            
+        # Penalize if split index is deeper? (e.g. Artist is very long)
+        if i > 2:
+            confidence -= 0.05
 
-    yield ParsedMetadata(artist=artist, title=title, confidence=0.6)
+        yield ParsedMetadata(artist=artist, title=title, confidence=confidence)
 
 
 def _extract_parentheses_pattern(filename: str) -> Iterator[ParsedMetadata]:
@@ -289,16 +398,84 @@ def _extract_no_artist_pattern(filename: str) -> Iterator[ParsedMetadata]:
     """
     Fall back to treating entire filename as title (no artist).
 
-    This is the lowest confidence option.
+    This is the lowest confidence option, but updated to handle snake_case.
     """
     cleaned = _clean_text(filename)
+    
+    # Replace underscores with spaces for the title-only fallback
+    cleaned = cleaned.replace("_", " ")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
 
     if cleaned and len(cleaned) > 2:
+        # Increase confidence slightly to compete with weak splits
         yield ParsedMetadata(
             artist=None,
             title=cleaned,
-            confidence=0.2
+            confidence=0.5
         )
+
+
+def _extract_first_word_pattern(filename: str) -> Iterator[ParsedMetadata]:
+    """
+    Extract using the first word as the artist.
+    Useful for space-separated "Artist Title" patterns with no clear separator.
+    
+    Example: "aespa Next Level" -> Artist="aespa", Title="Next Level"
+    """
+    cleaned = _clean_text(filename)
+    
+    # If there's already a separator like " - ", this pattern isn't needed (dash pattern covers it)
+    if " - " in cleaned or " – " in cleaned or " — " in cleaned:
+        return
+        
+    parts = cleaned.split(" ", 1)
+    if len(parts) != 2:
+        return
+        
+    artist = parts[0]
+    title = parts[1]
+    
+    if len(artist) < 2 or not _is_likely_artist_name(artist):
+        return
+        
+    # Low confidence because splitting by space is risky
+    # But if the artist is capitalized and not a stop word, maybe higher?
+    confidence = 0.35
+    
+    if artist[0].isupper() and artist.lower() not in STOP_WORDS:
+        confidence = 0.45
+        
+    yield ParsedMetadata(artist=artist, title=title, confidence=confidence)
+
+
+def _extract_swap_pattern(filename: str) -> Iterator[ParsedMetadata]:
+    """
+    Extract as "Title - Artist" (swapped).
+    Useful for files named like "Song Title - ArtistName.mp3".
+    """
+    cleaned = _clean_text(filename)
+    
+    # Only try swapped if there's a dash separator
+    separators = [" - ", " – ", " — "]
+    
+    for separator in separators:
+        result = _split_by_separator(cleaned, separator)
+        if not result:
+            continue
+            
+        title, artist = result
+        
+        # Clean parts
+        artist = _clean_text(artist)
+        title = _clean_text(title)
+        
+        if not artist or not title:
+            continue
+            
+        # If the 'artist' part looks like a real artist, yield it
+        if _is_likely_artist_name(artist) and artist.lower() not in STOP_WORDS:
+            # Lower confidence than standard "Artist - Title"
+            yield ParsedMetadata(artist=artist, title=title, confidence=0.45)
 
 
 def parse_filename(filename: str) -> list[ParsedMetadata]:
@@ -325,10 +502,12 @@ def parse_filename(filename: str) -> list[ParsedMetadata]:
 
     # Try each extraction pattern (ordered by reliability)
     results.extend(_extract_dash_pattern(filename))
+    results.extend(_extract_swap_pattern(filename))
     results.extend(_extract_track_number_pattern(filename))
     results.extend(_extract_underscore_pattern(filename))
     results.extend(_extract_parentheses_pattern(filename))
     results.extend(_extract_camelcase_pattern(filename))
+    results.extend(_extract_first_word_pattern(filename))
     results.extend(_extract_no_artist_pattern(filename))
 
     # Sort by confidence descending
@@ -418,6 +597,38 @@ def generate_title_variants(title: str) -> list[str]:
     return cleaned_variants
 
 
+def generate_artist_variants(artist: str) -> list[str]:
+    """
+    Generate variants of the artist name.
+    
+    Examples:
+        "The Beatles" -> ["The Beatles", "Beatles"]
+        "Jay-Z" -> ["Jay-Z", "Jay Z"]
+    """
+    if not artist:
+        return []
+        
+    variants = [artist]
+    seen = {artist.lower()}
+    
+    # Remove "The " prefix
+    if artist.lower().startswith("the "):
+        no_the = artist[4:]
+        if no_the.lower() not in seen:
+            variants.append(no_the)
+            seen.add(no_the.lower())
+            
+    # Replace special chars with spaces
+    cleaned = re.sub(r"[^\w\s]", " ", artist)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    if cleaned.lower() not in seen and len(cleaned) > 1:
+        variants.append(cleaned)
+        seen.add(cleaned.lower())
+        
+    return variants
+
+
+
 def should_parse_filename(title: str, existing_artist: str | None) -> bool:
     """
     Determine if we should attempt filename parsing.
@@ -434,7 +645,7 @@ def should_parse_filename(title: str, existing_artist: str | None) -> bool:
     """
     # If we already have an artist, check if title looks like "Artist - Title"
     # which might indicate the artist in DB is wrong
-    if existing_artist:
+    if existing_artist and not is_placeholder_artist(existing_artist):
         # Check if title contains a dash pattern that might override existing artist
         if " - " in title or " – " in title or " — " in title:
             # Parse and see if we get a different artist
@@ -457,5 +668,8 @@ def should_parse_filename(title: str, existing_artist: str | None) -> bool:
         "_" in title and " " not in title,  # Underscore-separated
         bool(re.search(r"\([^)]{2,30}\)", title)),  # Parentheses with reasonable content
     ]
+    if any(indicators):
+        return True
 
-    return any(indicators)
+    word_count = len([word for word in title.split() if word])
+    return word_count >= 2

@@ -92,10 +92,24 @@ async def update_acquisition_backend(
     backend: AcquisitionBackend,
 ) -> dict[str, Any]:
     """Update or create an acquisition backend configuration."""
+    # Validate cookies file if provided
+    if backend.cookies_file:
+        cookies_path = Path(backend.cookies_file).expanduser().resolve()
+        if not cookies_path.exists():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cookies file not found at: {cookies_path}. Please check the path and try again."
+            )
+        if not cookies_path.is_file():
+            raise HTTPException(
+                status_code=400,
+                detail=f"Path is not a file: {cookies_path}"
+            )
+
     settings = _load_acquisition_settings()
     settings.backends[backend_id] = backend
     _save_acquisition_settings(settings)
-    return {"status": "success", "backend_id": backend_id}
+    return {"status": "success", "backend_id": backend_id, "message": "Backend configuration saved successfully"}
 
 
 @router.post("/backends/{backend_id}/set-active")
@@ -158,14 +172,21 @@ async def test_acquisition_backend(backend_id: str) -> dict[str, Any]:
                 "extract_flat": True,
             }
 
+            cookies_file_info = "No cookies configured"
             if backend.cookies_file:
                 cookies_path = Path(backend.cookies_file).expanduser().resolve()
                 if not cookies_path.exists():
                     return {
                         "status": "error",
-                        "message": f"Cookies file not found: {backend.cookies_file}"
+                        "message": f"Cookies file not found at: {cookies_path}. Please verify the path is correct and the file exists."
+                    }
+                if not cookies_path.is_file():
+                    return {
+                        "status": "error",
+                        "message": f"Path is not a file: {cookies_path}"
                     }
                 ydl_opts["cookiefile"] = str(cookies_path)
+                cookies_file_info = f"Using cookies from {cookies_path}"
 
             # Try a simple search to test authentication
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -175,7 +196,7 @@ async def test_acquisition_backend(backend_id: str) -> dict[str, Any]:
                     authenticated = backend.cookies_file is not None
                     return {
                         "status": "success",
-                        "message": "Backend is working correctly",
+                        "message": f"Backend is working correctly. {cookies_file_info}",
                         "authenticated": authenticated,
                     }
                 return {
@@ -183,9 +204,15 @@ async def test_acquisition_backend(backend_id: str) -> dict[str, Any]:
                     "message": "Failed to extract info from yt-dlp"
                 }
         except Exception as e:
+            error_msg = str(e)
+            if "Sign in to confirm" in error_msg or "bot" in error_msg.lower():
+                return {
+                    "status": "error",
+                    "message": f"YouTube is requesting authentication. Your cookies may be expired or invalid. Please re-export fresh cookies from your browser. Error: {error_msg}"
+                }
             return {
                 "status": "error",
-                "message": f"Test failed: {str(e)}"
+                "message": f"Test failed: {error_msg}"
             }
 
     return {

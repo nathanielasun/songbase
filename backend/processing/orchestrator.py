@@ -20,6 +20,7 @@ from backend.processing.acquisition_pipeline import config as acquisition_config
 from backend.processing.acquisition_pipeline import db as acquisition_db
 from backend.processing.acquisition_pipeline import io as acquisition_io
 from backend.processing.acquisition_pipeline import pipeline as acquisition_pipeline
+from backend.processing.audio_conversion_pipeline import pipeline as audio_conversion_pipeline
 from backend.processing.audio_pipeline import io as audio_io
 from backend.processing.audio_pipeline.pipeline import embed_wav_file
 from backend.processing.hash_pipeline.pipeline import save_normalized_wav
@@ -79,7 +80,7 @@ class PipelinePaths:
             preprocessed_cache_dir=preprocessed,
             pcm_raw_dir=preprocessed / "pcm_raw",
             pcm_norm_dir=preprocessed / "pcm_norm",
-            embedding_dir=preprocessed / "embeddings",
+            embedding_dir=repo_root / ".embeddings",
             song_cache_dir=song_cache,
             pipeline_state_path=preprocessed / "pipeline_state.jsonl",
         )
@@ -839,6 +840,20 @@ def run_orchestrator(
                 f"{results['downloaded']} downloaded, {results['failed']} failed."
             )
 
+        # Audio conversion phase (convert video/other formats to MP3)
+        conversion_results = audio_conversion_pipeline.convert_pending(
+            limit=config.process_limit,
+            output_dir=None,  # Convert in place
+            overwrite=False,
+        )
+        if conversion_results["total"] > 0:
+            print(
+                "Conversion results: "
+                f"{conversion_results['converted']} converted, "
+                f"{conversion_results['skipped']} skipped, "
+                f"{conversion_results['failed']} failed."
+            )
+
         # Processing phase
         process_statuses = {
             acquisition_config.DOWNLOAD_STATUS_DOWNLOADED,
@@ -854,12 +869,13 @@ def run_orchestrator(
             # Single batch mode - exit after first iteration
             break
 
-        # Count remaining items in queue (pending + processing statuses)
+        # Count remaining items in queue (pending + converting + processing statuses)
         pending_count = _count_queue_items([acquisition_config.DOWNLOAD_STATUS_PENDING])
+        converting_count = _count_queue_items(["converting"])
         processing_count = _count_queue_items(list(process_statuses))
-        total_remaining = pending_count + processing_count
+        total_remaining = pending_count + converting_count + processing_count
 
-        print(f"Queue status: {pending_count} pending, {processing_count} processing")
+        print(f"Queue status: {pending_count} pending, {converting_count} converting, {processing_count} processing")
 
         if total_remaining == 0:
             print("Queue is empty. Stopping.")

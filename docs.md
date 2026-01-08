@@ -47,6 +47,10 @@ songbase/
 │   └── processing/    # Audio processing modules
 │       ├── bin/
 │       │   └── .gitkeep      - Placeholder for bundled ffmpeg binary
+│       ├── audio_conversion_pipeline/
+│       │   ├── config.py      - Conversion settings and supported formats
+│       │   ├── converter.py   - Audio/video to MP3 conversion logic
+│       │   └── pipeline.py    - Batch conversion orchestration
 │       ├── audio_pipeline/
 │       │   ├── cli.py         - CLI for embedding PCM WAVs
 │       │   ├── config.py      - Pipeline constants
@@ -71,6 +75,7 @@ songbase/
 │       │   ├── discovery_providers.py - External discovery routines (MusicBrainz, hotlists)
 │       │   ├── downloader.py    - yt-dlp download worker
 │       │   ├── io.py            - Metadata JSON writer
+│       │   ├── importer.py      - Local file import into the queue
 │       │   ├── pipeline.py      - Parallel download orchestration
 │       │   └── sources.py       - Extendable song source list reader
 │       ├── metadata_pipeline/
@@ -103,6 +108,7 @@ songbase/
 ├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
 ├── .metadata/           # Local Postgres data (ignored)
 ├── .song_cache/         # SHA-256 hashed song database
+├── .embeddings/         # VGGish embedding files (SHA-named .npz)
 ├── STATUS/              # Project planning and status docs (see STATUS/processing-backend-plan.md)
 └── dev.sh               # Development server startup script
 ```
@@ -121,18 +127,23 @@ songbase/
 - **Features**:
   - API proxy rewrites: `/api/*` → `http://localhost:8000/api/*`
   - Enables seamless frontend-backend communication in development
+  - Raises proxy body limit to 5GB for local file import uploads
 
 ### frontend/app/library/page.tsx
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
-- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`
+- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/acquisition/backends`
 - **Notes**: Sources already queued are hidden from the sources list and shown only in the pipeline queue table.
 - **Notes**: The pipeline queue table is paged (10/25/50/100).
 - **Notes**: The pipeline run panel shows live config, last event, and cache paths while running.
 - **Notes**: "Run until queue is empty" checkbox automatically processes batches until all pending and processing items are stored or failed.
+- **Notes**: Acquisition backend panel allows configuring yt-dlp authentication with browser cookies for accessing age-restricted or member-only content.
+- **Notes**: Manage Music includes local file import (audio/video) via `/api/library/import`.
+- **Notes**: Database tab includes a song metadata editor with a right-side details panel and edit flow.
 
 ### frontend/app/settings/page.tsx
 - **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
 - **Uses**: `/api/settings`, `/api/settings/reset`
+- **Notes**: Reset can clear embeddings, hashed music, and artist/album metadata + images.
 
 ### Usage Examples
 
@@ -199,6 +210,7 @@ try {
   - `GET /api/library/songs`: List songs in the metadata DB
   - `GET /api/library/songs/unlinked`: List songs missing album or artist metadata
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
+  - `PUT /api/library/songs/{sha_id}`: Update song metadata (title, artist, album, genre, release year, track number)
   - `POST /api/library/songs/link`: Attach songs to an existing album record
   - `GET /api/library/albums`: List cached album metadata
   - `GET /api/library/albums/{album_id}`: Fetch album metadata + library songs
@@ -207,6 +219,7 @@ try {
   - `GET /api/library/images/artist/{artist_id}`: Stream artist artwork
   - `GET /api/library/stream/{sha_id}`: Stream audio from the hashed cache
   - `POST /api/library/queue`: Queue songs for acquisition (accepts a list of titles)
+  - `POST /api/library/import`: Import local audio/video files into the queue (multipart form upload)
   - `GET /api/library/queue`: View download queue status
   - `POST /api/library/queue/clear`: Clear the download queue
   - `GET /api/library/sources`: List entries in `sources.jsonl`
@@ -222,6 +235,33 @@ try {
     -d '{"items":[{"title":"Artist - Track","search_query":"Artist - Track"}]}'
 
   curl http://localhost:8000/api/library/pipeline/status
+
+  # Import local files
+  curl -X POST http://localhost:8000/api/library/import \
+    -F "files=@/path/to/song.mp3" \
+    -F "files=@/path/to/video.mp4"
+  ```
+
+### backend/api/routes/acquisition.py
+- **Purpose**: Manage acquisition backend configuration and authentication
+- **Endpoints**:
+  - `GET /api/acquisition/backends`: Get all configured acquisition backends
+  - `POST /api/acquisition/backends/{backend_id}`: Update or create a backend configuration
+  - `POST /api/acquisition/backends/{backend_id}/set-active`: Set the active acquisition backend
+  - `DELETE /api/acquisition/backends/{backend_id}`: Delete a backend configuration
+  - `POST /api/acquisition/backends/{backend_id}/test`: Test backend configuration and authentication
+- **Usage**:
+  ```bash
+  # Get current backends
+  curl http://localhost:8000/api/acquisition/backends
+
+  # Update yt-dlp backend with cookies
+  curl -X POST http://localhost:8000/api/acquisition/backends/yt-dlp \
+    -H "Content-Type: application/json" \
+    -d '{"backend_type":"yt-dlp","enabled":true,"auth_method":"cookies","cookies_file":"~/.config/yt-dlp/cookies.txt"}'
+
+  # Test backend
+  curl -X POST http://localhost:8000/api/acquisition/backends/yt-dlp/test
   ```
 
 ### backend/api/routes/settings.py
@@ -229,7 +269,7 @@ try {
 - **Endpoints**:
   - `GET /api/settings`: Fetch stored settings
   - `PUT /api/settings`: Update settings (pipeline + paths)
-  - `POST /api/settings/reset`: Clear embeddings and/or hashed music (requires `confirm: "CLEAR"`)
+  - `POST /api/settings/reset`: Clear embeddings, hashed music, and/or artist/album data (requires `confirm: "CLEAR"`)
 - **Usage**:
   ```bash
   curl http://localhost:8000/api/settings
@@ -303,6 +343,19 @@ try {
 
 ## Backend Processing Modules
 
+### backend/processing/audio_conversion_pipeline/
+- **Purpose**: Convert various audio and video formats to MP3 before processing
+- **Key Modules**:
+  - `config.py`: Supported formats and conversion settings
+  - `converter.py`: Core conversion logic using ffmpeg
+  - `pipeline.py`: Batch conversion orchestration with queue integration
+- **Supported Input Formats**:
+  - **Audio**: M4A, AAC, FLAC, WAV, OGG, Opus, WMA
+  - **Video**: MP4, AVI, MOV, MKV, WebM, FLV, WMV (extracts audio track)
+- **Output**: High-quality MP3 (320kbps, 44.1kHz)
+- **Queue Status**: `converting` → `downloaded`
+- **Notes**: Original files are automatically deleted after successful conversion to save space
+
 ### backend/processing/mp3_to_pcm.py
 - **Purpose**: Bulk MP3 to PCM WAV conversion
 - **Requires**: ffmpeg (auto-downloads to `backend/processing/bin/ffmpeg` when missing, or uses PATH)
@@ -313,8 +366,15 @@ try {
   ```
 
 ### backend/processing/orchestrator.py
-- **Purpose**: End-to-end orchestration of download, PCM conversion, hashing, embeddings, and storage.
+- **Purpose**: End-to-end orchestration of download, audio conversion, PCM conversion, hashing, embeddings, and storage.
 - **Requires**: `SONGBASE_DATABASE_URL` set, ffmpeg, and VGGish assets.
+- **Pipeline Flow**:
+  1. **Acquisition** (`pending` → `downloading` → `downloaded` or `converting`)
+  2. **Audio Conversion** (`converting` → `downloaded`) - converts videos/other formats to MP3
+  3. **PCM Conversion** (`downloaded` → `pcm_raw_ready`)
+  4. **Hashing** (`pcm_raw_ready` → `hashed`)
+  5. **Embedding** (`hashed` → `embedded`)
+  6. **Storage** (`embedded` → `stored`, then removed from queue)
 - **Usage**:
   ```bash
   SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py --seed-sources --download --process-limit 25
@@ -443,11 +503,19 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
 - **Key Modules**:
   - `cli.py`: Command-line interface for acquisition
   - `config.py`: Cache locations + yt-dlp settings
+    - **Dynamic cookies loading**: Checks stored acquisition settings first, then falls back to `SONGBASE_YTDLP_COOKIES_FILE` environment variable
+    - **Backend authentication**: Supports browser cookie files for yt-dlp authentication
+    - **Format selection preferences**: `YTDLP_PREFER_AUDIO_ONLY` (default: `True`), `YTDLP_MAX_AUDIO_QUALITY` (default: `256` kbps)
   - `db.py`: Download queue helpers (reads `metadata.download_queue`)
     - **Automatic cleanup**: Songs are automatically removed from the queue when they reach "stored" or "duplicate" status to prevent duplication
+  - `downloader.py`: yt-dlp download worker
+    - **Intelligent format selection**: Queries available formats first, then selects the best one
+    - **Audio-only preference**: Prefers audio-only formats over video+audio to save bandwidth and conversion time
+    - **Quality-aware**: Sorts by audio bitrate (up to max quality) and filesize
+    - **Automatic fallback**: Falls back to "bestaudio/best" if format selection fails
+    - **Format detection**: Detects if downloaded file needs audio conversion (videos, non-MP3 audio)
   - `discovery.py`: Song list discovery + sources.jsonl writer (no downloads)
   - `discovery_providers.py`: External discovery routines (MusicBrainz, hotlists)
-  - `downloader.py`: yt-dlp download worker
   - `io.py`: Writes JSON metadata sidecars
   - `pipeline.py`: Parallel download orchestration
   - `sources.py`: Extendable JSONL song list ingestion
@@ -844,11 +912,13 @@ Starting from the latest update, the metadata verification pipeline (`backend/pr
    - Parses filenames with multiple strategies
    - Returns confidence-scored interpretations
    - Handles common artist-title patterns
+   - Treats placeholder artists (e.g., "Unknown Artist") and numeric prefixes as weak signals, keeping title-only fallbacks
 
 2. **`backend/processing/metadata_pipeline/multi_source_resolver.py`**:
    - Orchestrates multi-source metadata resolution
    - Implements fallback chain across all sources
    - Validates parsed metadata against match results
+   - Tries title/artist variants (underscore cleanup, MV/Visualizer/Monstercat stripping) and merges stop-word artists into title-only searches when needed
 
 3. **`backend/processing/metadata_pipeline/pipeline.py`**:
    - Main verification entry point

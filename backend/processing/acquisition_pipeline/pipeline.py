@@ -63,11 +63,22 @@ def download_pending(
             if result.success and result.output_path:
                 metadata = _build_metadata(result)
                 write_metadata(result.output_path, metadata)
-                mark_status(
-                    result.item.queue_id,
-                    config.DOWNLOAD_STATUS_DOWNLOADED,
-                    download_path=str(result.output_path),
-                )
+
+                # Check if the file needs audio conversion
+                if result.needs_conversion:
+                    # Mark as "converting" status to trigger conversion step
+                    mark_status(
+                        result.item.queue_id,
+                        "converting",
+                        download_path=str(result.output_path),
+                    )
+                else:
+                    # Already MP3, mark as downloaded
+                    mark_status(
+                        result.item.queue_id,
+                        config.DOWNLOAD_STATUS_DOWNLOADED,
+                        download_path=str(result.output_path),
+                    )
                 downloaded += 1
             else:
                 mark_status(

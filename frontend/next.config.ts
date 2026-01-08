@@ -4,6 +4,9 @@ const isElectron = process.env.BUILD_TARGET === 'electron';
 
 const nextConfig: NextConfig = {
   output: isElectron ? 'export' : undefined,
+  experimental: {
+    proxyClientMaxBodySize: '5gb',
+  },
 
   images: {
     remotePatterns: [

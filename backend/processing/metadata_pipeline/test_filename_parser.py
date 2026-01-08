@@ -1,6 +1,27 @@
 """Tests for intelligent filename parser."""
 
-from .filename_parser import parse_filename, should_parse_filename
+from .filename_parser import parse_filename, should_parse_filename, generate_artist_variants
+
+
+def test_generate_artist_variants():
+    """Test artist variant generation."""
+    # Test "The" prefix removal
+    variants = generate_artist_variants("The Beatles")
+    assert "Beatles" in variants
+    assert "The Beatles" in variants
+    
+    # Test special char removal
+    variants = generate_artist_variants("P!nk")
+    assert "P nk" in variants
+    
+    variants = generate_artist_variants("AC/DC")
+    assert "AC DC" in variants
+    
+    # Test no change
+    variants = generate_artist_variants("Artist")
+    assert len(variants) == 1
+    assert variants[0] == "Artist"
+
 
 
 def test_aoa_miniskirt():
@@ -130,5 +151,6 @@ if __name__ == "__main__":
     test_should_parse_override_artist()
     test_complex_title_cleaning()
     test_year_removal()
+    test_generate_artist_variants()
 
     print("All tests passed!")

@@ -26,6 +26,12 @@ type ResetResponse = {
   embeddings_deleted: number;
   song_cache_entries_deleted: number;
   embedding_files_deleted: number;
+  albums_deleted: number;
+  album_tracks_deleted: number;
+  artist_profiles_deleted: number;
+  album_images_deleted: number;
+  song_images_deleted: number;
+  image_assets_deleted: number;
 };
 
 type FormState = {
@@ -63,6 +69,7 @@ export default function SettingsPage() {
   const [busy, setBusy] = useState(false);
   const [resetEmbeddings, setResetEmbeddings] = useState(false);
   const [resetHashedMusic, setResetHashedMusic] = useState(false);
+  const [resetArtistAlbum, setResetArtistAlbum] = useState(false);
 
   const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, {
@@ -155,7 +162,7 @@ export default function SettingsPage() {
   const handleReset = async () => {
     setStatusMessage(null);
     setErrorMessage(null);
-    if (!resetEmbeddings && !resetHashedMusic) {
+    if (!resetEmbeddings && !resetHashedMusic && !resetArtistAlbum) {
       setErrorMessage('Select at least one reset option.');
       return;
     }
@@ -173,6 +180,7 @@ export default function SettingsPage() {
         body: JSON.stringify({
           clear_embeddings: resetEmbeddings,
           clear_hashed_music: resetHashedMusic,
+          clear_artist_album: resetArtistAlbum,
           confirm,
         }),
       });
@@ -185,9 +193,18 @@ export default function SettingsPage() {
         parts.push(`embeddings removed: ${result.embeddings_deleted}`);
         parts.push(`embedding files removed: ${result.embedding_files_deleted}`);
       }
+      if (resetArtistAlbum) {
+        parts.push(`albums removed: ${result.albums_deleted}`);
+        parts.push(`album tracks removed: ${result.album_tracks_deleted}`);
+        parts.push(`artist profiles removed: ${result.artist_profiles_deleted}`);
+        parts.push(`album images removed: ${result.album_images_deleted}`);
+        parts.push(`song images removed: ${result.song_images_deleted}`);
+        parts.push(`image assets removed: ${result.image_assets_deleted}`);
+      }
       setStatusMessage(`Reset complete. ${parts.join(', ')}.`);
       setResetEmbeddings(false);
       setResetHashedMusic(false);
+      setResetArtistAlbum(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Reset failed.');
     } finally {
@@ -397,6 +414,20 @@ export default function SettingsPage() {
                     <span className="font-semibold">Clear hashed music</span>
                     <span className="block text-xs text-red-200/70">
                       Deletes `.song_cache` files and removes song metadata (this also clears embeddings).
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={resetArtistAlbum}
+                    onChange={(e) => setResetArtistAlbum(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-red-500/40 bg-red-500/10 text-red-200 focus:ring-0"
+                  />
+                  <span>
+                    <span className="font-semibold">Clear artist &amp; album data</span>
+                    <span className="block text-xs text-red-200/70">
+                      Clears cached album metadata and artist/album images from the separate media database.
                     </span>
                   </span>
                 </label>

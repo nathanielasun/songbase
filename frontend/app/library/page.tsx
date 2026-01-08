@@ -1,14 +1,19 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
+import Link from 'next/link';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
+  ArrowUpTrayIcon,
   ChartBarIcon,
+  InformationCircleIcon,
   MagnifyingGlassIcon,
+  PencilSquareIcon,
   QueueListIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
 
@@ -140,9 +145,66 @@ type AlbumCatalogResponse = {
   query?: string | null;
 };
 
+type CatalogSong = {
+  sha_id: string;
+  title?: string | null;
+  album?: string | null;
+  duration_sec?: number | null;
+  release_year?: number | null;
+  track_number?: number | null;
+  verified?: boolean | null;
+  verification_source?: string | null;
+  artists: string[];
+  primary_artist_id?: number | null;
+  album_id?: string | null;
+};
+
+type CatalogResponse = {
+  items: CatalogSong[];
+  total: number;
+  limit: number;
+  offset: number;
+  query?: string | null;
+};
+
+type SongDetail = CatalogSong & {
+  genres: string[];
+  labels: string[];
+  producers: string[];
+  verification_score?: number | null;
+  musicbrainz_recording_id?: string | null;
+  primary_artist_name?: string | null;
+  album_artist_name?: string | null;
+  album_release_year?: number | null;
+  album_release_date?: string | null;
+};
+
+type SongEditForm = {
+  title: string;
+  artist: string;
+  album: string;
+  genre: string;
+  releaseYear: string;
+  trackNumber: string;
+};
+
+type AcquisitionBackend = {
+  backend_type: string;
+  enabled: boolean;
+  auth_method?: string | null;
+  cookies_file?: string | null;
+  username?: string | null;
+};
+
+type AcquisitionSettings = {
+  active_backend: string;
+  backends: Record<string, AcquisitionBackend>;
+};
+
 const statusStyles: Record<string, string> = {
   pending: 'bg-gray-700 text-gray-200',
   downloading: 'bg-blue-600 text-white',
+  converting: 'bg-purple-600 text-white',
   downloaded: 'bg-indigo-600 text-white',
   pcm_raw_ready: 'bg-yellow-600 text-black',
   hashed: 'bg-orange-500 text-black',
@@ -166,6 +228,9 @@ const emptyStats: LibraryStats = {
   embeddings: 0,
   queue: {},
 };
+
+const MAX_IMPORT_BYTES = 5 * 1024 * 1024 * 1024;
+const MAX_IMPORT_LABEL = '5GB';
 
 export default function LibraryPage() {
   const [activeTab, setActiveTab] = useState<TabId>('manage');
@@ -192,13 +257,46 @@ export default function LibraryPage() {
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [catalogItems, setCatalogItems] = useState<CatalogSong[]>([]);
+  const [catalogTotal, setCatalogTotal] = useState(0);
+  const [catalogQuery, setCatalogQuery] = useState('');
+  const [catalogPage, setCatalogPage] = useState(1);
+  const [catalogPageSize, setCatalogPageSize] = useState(25);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [selectedSongId, setSelectedSongId] = useState<string | null>(null);
+  const [songDetail, setSongDetail] = useState<SongDetail | null>(null);
+  const [songDetailError, setSongDetailError] = useState<string | null>(null);
+  const [songDetailBusy, setSongDetailBusy] = useState(false);
+  const [songEditMode, setSongEditMode] = useState(false);
+  const [songEditForm, setSongEditForm] = useState<SongEditForm>({
+    title: '',
+    artist: '',
+    album: '',
+    genre: '',
+    releaseYear: '',
+    trackNumber: '',
+  });
+  const [songSaveBusy, setSongSaveBusy] = useState(false);
+  const [songSaveMessage, setSongSaveMessage] = useState<string | null>(null);
+  const [songSaveError, setSongSaveError] = useState<string | null>(null);
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
   const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(true);
+  const [isBackendCollapsed, setIsBackendCollapsed] = useState(true);
+
+  const [acquisitionSettings, setAcquisitionSettings] = useState<AcquisitionSettings | null>(null);
+  const [backendCookiesFile, setBackendCookiesFile] = useState('');
+  const [backendTestResult, setBackendTestResult] = useState<string | null>(null);
+  const [backendBusy, setBackendBusy] = useState(false);
 
   const [searchTitle, setSearchTitle] = useState('');
   const [searchArtist, setSearchArtist] = useState('');
   const [searchUrl, setSearchUrl] = useState('');
   const [bulkList, setBulkList] = useState('');
+  const [importFiles, setImportFiles] = useState<File[]>([]);
+  const [importBusy, setImportBusy] = useState(false);
+  const [importMessage, setImportMessage] = useState<string | null>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const [appendSources, setAppendSources] = useState(true);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
@@ -253,6 +351,14 @@ export default function LibraryPage() {
   }, [queuePageSize, queueTotal]);
 
   const queueOffset = (queuePage - 1) * queuePageSize;
+  const catalogOffset = (catalogPage - 1) * catalogPageSize;
+
+  const catalogPageCount = useMemo(() => {
+    if (!catalogTotal) {
+      return 1;
+    }
+    return Math.max(1, Math.ceil(catalogTotal / catalogPageSize));
+  }, [catalogPageSize, catalogTotal]);
 
   const lastEvent = useMemo(() => {
     const events = pipelineStatus.events ?? [];
@@ -402,12 +508,106 @@ export default function LibraryPage() {
     []
   );
 
+  const refreshCatalog = useCallback(async () => {
+    const params = new URLSearchParams({
+      limit: String(catalogPageSize),
+      offset: String(catalogOffset),
+    });
+    if (catalogQuery.trim()) {
+      params.set('q', catalogQuery.trim());
+    }
+    try {
+      const data = await fetchJson<CatalogResponse>(
+        `/api/library/catalog?${params.toString()}`
+      );
+      setCatalogItems(data.items);
+      setCatalogTotal(data.total);
+      setCatalogError(null);
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'Failed to load songs.');
+    }
+  }, [catalogOffset, catalogPageSize, catalogQuery]);
+
+  const refreshAcquisitionSettings = useCallback(async () => {
+    try {
+      const data = await fetchJson<AcquisitionSettings>('/api/acquisition/backends');
+      setAcquisitionSettings(data);
+      const activeBackend = data.backends[data.active_backend];
+      if (activeBackend?.cookies_file) {
+        setBackendCookiesFile(activeBackend.cookies_file);
+      }
+    } catch (error) {
+      console.error('Failed to load acquisition settings:', error);
+    }
+  }, []);
+
+  const updateAcquisitionBackend = async (backendId: string, cookiesFile: string) => {
+    setBackendBusy(true);
+    setBackendTestResult(null);
+    try {
+      const backend: AcquisitionBackend = {
+        backend_type: backendId,
+        enabled: true,
+        auth_method: cookiesFile ? 'cookies' : null,
+        cookies_file: cookiesFile || null,
+      };
+      await fetchJson(`/api/acquisition/backends/${backendId}`, {
+        method: 'POST',
+        body: JSON.stringify(backend),
+      });
+      await refreshAcquisitionSettings();
+      setBackendTestResult('Backend updated successfully');
+    } catch (error) {
+      setBackendTestResult(
+        error instanceof Error ? error.message : 'Failed to update backend'
+      );
+    } finally {
+      setBackendBusy(false);
+    }
+  };
+
+  const testAcquisitionBackend = async (backendId: string) => {
+    setBackendBusy(true);
+    setBackendTestResult(null);
+    try {
+      const result = await fetchJson<{ status: string; message: string; authenticated?: boolean }>(
+        `/api/acquisition/backends/${backendId}/test`,
+        { method: 'POST' }
+      );
+      if (result.status === 'success') {
+        const authStatus = result.authenticated ? ' (authenticated)' : ' (not authenticated)';
+        setBackendTestResult(`✓ ${result.message}${authStatus}`);
+      } else {
+        setBackendTestResult(`✗ ${result.message}`);
+      }
+    } catch (error) {
+      setBackendTestResult(
+        error instanceof Error ? error.message : 'Failed to test backend'
+      );
+    } finally {
+      setBackendBusy(false);
+    }
+  };
+
+  const buildSongEditForm = useCallback(
+    (detail: SongDetail): SongEditForm => ({
+      title: detail.title ?? '',
+      artist: detail.artists?.join(', ') ?? '',
+      album: detail.album ?? '',
+      genre: detail.genres?.join(', ') ?? '',
+      releaseYear: detail.release_year ? String(detail.release_year) : '',
+      trackNumber: detail.track_number ? String(detail.track_number) : '',
+    }),
+    []
+  );
+
   useEffect(() => {
     refreshStats();
     refreshPipeline();
     refreshSettings();
     refreshSources();
-  }, [refreshPipeline, refreshSettings, refreshStats, refreshSources]);
+    refreshAcquisitionSettings();
+  }, [refreshPipeline, refreshSettings, refreshStats, refreshSources, refreshAcquisitionSettings]);
 
   useEffect(() => {
     refreshQueue();
@@ -430,7 +630,15 @@ export default function LibraryPage() {
     refreshMetadataStatus();
     refreshUnlinked();
     refreshAlbumCatalog(albumSearch);
-  }, [activeTab, refreshAlbumCatalog, refreshMetadataStatus, refreshStats, refreshUnlinked]);
+    refreshCatalog();
+  }, [
+    activeTab,
+    refreshAlbumCatalog,
+    refreshCatalog,
+    refreshMetadataStatus,
+    refreshStats,
+    refreshUnlinked,
+  ]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
@@ -439,6 +647,14 @@ export default function LibraryPage() {
     }, 250);
     return () => window.clearTimeout(timeout);
   }, [activeTab, albumSearch, refreshAlbumCatalog]);
+
+  useEffect(() => {
+    if (activeTab !== 'stats') return;
+    const timeout = window.setTimeout(() => {
+      refreshCatalog();
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [activeTab, catalogPage, catalogPageSize, catalogQuery, refreshCatalog]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
@@ -461,6 +677,49 @@ export default function LibraryPage() {
       setQueuePage(queuePageCount);
     }
   }, [queuePage, queuePageCount]);
+
+  useEffect(() => {
+    if (catalogPage > catalogPageCount) {
+      setCatalogPage(catalogPageCount);
+    }
+  }, [catalogPage, catalogPageCount]);
+
+  useEffect(() => {
+    if (!selectedSongId) {
+      setSongDetail(null);
+      setSongDetailError(null);
+      setSongEditMode(false);
+      return;
+    }
+    let active = true;
+    setSongDetailBusy(true);
+    setSongDetailError(null);
+    setSongSaveMessage(null);
+    setSongSaveError(null);
+    setSongEditMode(false);
+    fetchJson<SongDetail>(`/api/library/songs/${selectedSongId}`)
+      .then((data) => {
+        if (!active) {
+          return;
+        }
+        setSongDetail(data);
+        setSongEditForm(buildSongEditForm(data));
+      })
+      .catch((error) => {
+        if (!active) {
+          return;
+        }
+        setSongDetailError(error instanceof Error ? error.message : 'Failed to load song.');
+      })
+      .finally(() => {
+        if (active) {
+          setSongDetailBusy(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [buildSongEditForm, selectedSongId]);
 
   const formatTimestamp = (value?: string | null) => {
     if (!value) {
@@ -498,6 +757,13 @@ export default function LibraryPage() {
       return `${minutes}m ${seconds}s`;
     }
     return `${seconds}s`;
+  };
+
+  const formatList = (values?: string[] | null) => {
+    if (!values || values.length === 0) {
+      return '--';
+    }
+    return values.join(', ');
   };
 
   const parseOptionalNumber = (value: string) => {
@@ -619,6 +885,167 @@ export default function LibraryPage() {
       setActionError(error instanceof Error ? error.message : 'Bulk queue failed.');
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleSelectSong = (shaId: string) => {
+    setSelectedSongId(shaId);
+  };
+
+  const handleSongEdit = () => {
+    if (!songDetail) {
+      return;
+    }
+    setSongEditForm(buildSongEditForm(songDetail));
+    setSongEditMode(true);
+    setSongSaveMessage(null);
+    setSongSaveError(null);
+  };
+
+  const handleSongCancel = () => {
+    if (songDetail) {
+      setSongEditForm(buildSongEditForm(songDetail));
+    }
+    setSongEditMode(false);
+    setSongSaveMessage(null);
+    setSongSaveError(null);
+  };
+
+  const handleSongSave = async () => {
+    if (!selectedSongId) {
+      return;
+    }
+    setSongSaveMessage(null);
+    setSongSaveError(null);
+    const releaseYear = parseOptionalNumber(songEditForm.releaseYear);
+    if (songEditForm.releaseYear.trim() && releaseYear === null) {
+      setSongSaveError('Release year must be a valid number.');
+      return;
+    }
+    const trackNumber = parseOptionalNumber(songEditForm.trackNumber);
+    if (songEditForm.trackNumber.trim() && trackNumber === null) {
+      setSongSaveError('Track number must be a valid number.');
+      return;
+    }
+    setSongSaveBusy(true);
+    try {
+      const payload = {
+        title: songEditForm.title.trim() || null,
+        artist: songEditForm.artist.trim() || null,
+        album: songEditForm.album.trim() || null,
+        genre: songEditForm.genre.trim() || null,
+        release_year: releaseYear,
+        track_number: trackNumber,
+      };
+      const data = await fetchJson<SongDetail>(
+        `/api/library/songs/${selectedSongId}`,
+        {
+          method: 'PUT',
+          body: JSON.stringify(payload),
+        }
+      );
+      setSongDetail(data);
+      setSongEditForm(buildSongEditForm(data));
+      setSongEditMode(false);
+      setSongSaveMessage('Song metadata updated.');
+      setCatalogItems((prev) =>
+        prev.map((item) =>
+          item.sha_id === data.sha_id
+            ? {
+                ...item,
+                title: data.title,
+                album: data.album,
+                release_year: data.release_year,
+                track_number: data.track_number,
+                artists: data.artists,
+                primary_artist_id: data.primary_artist_id,
+                album_id: data.album_id,
+              }
+            : item
+        )
+      );
+      refreshStats();
+    } catch (error) {
+      setSongSaveError(error instanceof Error ? error.message : 'Failed to update song.');
+    } finally {
+      setSongSaveBusy(false);
+    }
+  };
+
+  const importTotalBytes = useMemo(
+    () => importFiles.reduce((sum, file) => sum + file.size, 0),
+    [importFiles]
+  );
+  const importOverLimit = importTotalBytes > MAX_IMPORT_BYTES;
+
+  const formatBytes = (value: number) => {
+    if (value <= 0) {
+      return '0 B';
+    }
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const index = Math.min(units.length - 1, Math.floor(Math.log(value) / Math.log(1024)));
+    const adjusted = value / 1024 ** index;
+    return `${adjusted.toFixed(adjusted >= 10 || index === 0 ? 0 : 1)} ${units[index]}`;
+  };
+
+  const handleImportSelect = (event: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(event.target.files ?? []);
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
+    setImportFiles(files);
+    setImportMessage(null);
+    if (totalBytes > MAX_IMPORT_BYTES) {
+      setImportError(`Max upload size reached (${MAX_IMPORT_LABEL}).`);
+    } else {
+      setImportError(null);
+    }
+    event.target.value = '';
+  };
+
+  const handleImportUpload = async () => {
+    setImportMessage(null);
+    setImportError(null);
+    if (importFiles.length === 0) {
+      setImportError('Select at least one audio or video file to import.');
+      return;
+    }
+    if (importOverLimit) {
+      setImportError(`Max upload size reached (${MAX_IMPORT_LABEL}).`);
+      return;
+    }
+    setImportBusy(true);
+    try {
+      const formData = new FormData();
+      importFiles.forEach((file) => formData.append('files', file));
+
+      const response = await fetch('/api/library/import', {
+        method: 'POST',
+        body: formData,
+      });
+      if (!response.ok) {
+        const text = await response.text();
+        throw new Error(text || 'Import failed.');
+      }
+      const result = (await response.json()) as {
+        queued: number;
+        imported: { filename: string }[];
+        failed: { filename: string; error: string }[];
+      };
+
+      const failures = result.failed ?? [];
+      if (failures.length) {
+        const firstFailure = failures[0];
+        setImportError(
+          `Failed to import ${failures.length} file(s). Example: ${firstFailure.filename} - ${firstFailure.error}`
+        );
+      }
+      setImportMessage(`Queued ${result.queued} file(s) for processing.`);
+      setImportFiles([]);
+      refreshQueue();
+      refreshStats();
+    } catch (error) {
+      setImportError(error instanceof Error ? error.message : 'Import failed.');
+    } finally {
+      setImportBusy(false);
     }
   };
 
@@ -998,8 +1425,9 @@ export default function LibraryPage() {
 
           <div className="px-8 pb-24">
             {activeTab === 'manage' && (
-              <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+              <div className="space-y-6">
+                <div className="grid gap-6 lg:grid-cols-[1.2fr_1fr]">
+                  <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center gap-3">
                     <MagnifyingGlassIcon className="h-5 w-5 text-gray-300" />
                     <h2 className="text-xl font-semibold">Search and Queue</h2>
@@ -1057,9 +1485,9 @@ export default function LibraryPage() {
                       Queue Song
                     </button>
                   </div>
-                </section>
+                  </section>
 
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center gap-3">
                     <QueueListIcon className="h-5 w-5 text-gray-300" />
                     <h2 className="text-xl font-semibold">Bulk List</h2>
@@ -1084,12 +1512,224 @@ export default function LibraryPage() {
                       Queue List
                     </button>
                   </div>
+                  </section>
+                </div>
+
+                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <div className="flex items-center gap-3">
+                    <ArrowUpTrayIcon className="h-5 w-5 text-gray-300" />
+                    <h2 className="text-xl font-semibold">Import Local Files</h2>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Add audio or video files directly from your computer. Files are converted to MP3,
+                    hashed, embedded, and stored like any other pipeline entry.
+                  </p>
+
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    multiple
+                    accept="audio/*,video/*,.mp3,.m4a,.aac,.flac,.wav,.ogg,.opus,.wma,.mp4,.mov,.mkv,.webm,.avi,.flv,.wmv,.m4v"
+                    onChange={handleImportSelect}
+                    className="hidden"
+                  />
+
+                  <div className="flex flex-wrap items-center gap-3 mt-5">
+                    <button
+                      onClick={() => importInputRef.current?.click()}
+                      disabled={importBusy}
+                      className="inline-flex items-center gap-2 rounded-full bg-gray-800 px-5 py-2 text-sm font-semibold text-white hover:bg-gray-700 disabled:opacity-50"
+                    >
+                      <ArrowUpTrayIcon className="h-4 w-4" />
+                      Choose Files
+                    </button>
+                    <button
+                      onClick={handleImportUpload}
+                      disabled={importBusy || importFiles.length === 0 || importOverLimit}
+                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                    >
+                      {importBusy ? 'Importing...' : 'Import Selected'}
+                    </button>
+                    {importFiles.length > 0 && (
+                      <button
+                        onClick={() => {
+                          setImportFiles([]);
+                          setImportMessage(null);
+                          setImportError(null);
+                        }}
+                        disabled={importBusy}
+                        className="inline-flex items-center gap-2 rounded-full border border-gray-700 px-4 py-2 text-xs font-semibold text-gray-200 hover:border-gray-500 disabled:opacity-50"
+                      >
+                        Clear Selection
+                      </button>
+                    )}
+                  </div>
+
+                  {importFiles.length > 0 && (
+                    <div className="mt-4 text-sm text-gray-300">
+                      <p>
+                        Selected {importFiles.length} file{importFiles.length === 1 ? '' : 's'} (
+                        {formatBytes(importTotalBytes)} total).
+                      </p>
+                      <ul className="mt-2 space-y-1 text-gray-400">
+                        {importFiles.slice(0, 4).map((file) => (
+                          <li key={`${file.name}-${file.lastModified}`}>{file.name}</li>
+                        ))}
+                        {importFiles.length > 4 && (
+                          <li>...and {importFiles.length - 4} more</li>
+                        )}
+                      </ul>
+                    </div>
+                  )}
+
+                  {(importMessage || importError) && (
+                    <div
+                      className={`mt-4 rounded-xl border px-4 py-3 text-sm ${
+                        importError
+                          ? 'border-red-500/40 bg-red-500/10 text-red-200'
+                          : 'border-emerald-500/40 bg-emerald-500/10 text-emerald-200'
+                      }`}
+                    >
+                      {importError ?? importMessage}
+                    </div>
+                  )}
                 </section>
               </div>
             )}
 
             {activeTab === 'downloads' && (
               <div className="space-y-6">
+                {/* Acquisition Backend Configuration */}
+                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
+                    <button
+                      onClick={() => setIsBackendCollapsed(!isBackendCollapsed)}
+                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+                    >
+                      <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Acquisition Backend</h2>
+                      {isBackendCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
+                      )}
+                    </button>
+                  </div>
+
+                  {!isBackendCollapsed && acquisitionSettings && (
+                    <div className="space-y-4 text-sm text-gray-300">
+                      <div>
+                        <p className="mb-3 text-gray-400">
+                          Configure authentication for music acquisition. yt-dlp supports browser cookies for downloading age-restricted or member-only content.
+                        </p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Active Backend
+                          </label>
+                          <div className="text-sm">
+                            <span className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium">
+                              {acquisitionSettings.active_backend}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-300 mb-2">
+                            Cookies File Path
+                          </label>
+                          <input
+                            type="text"
+                            value={backendCookiesFile}
+                            onChange={(e) => setBackendCookiesFile(e.target.value)}
+                            placeholder="~/.config/yt-dlp/cookies.txt"
+                            className="w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
+                          />
+                          <p className="mt-2 text-xs text-gray-500">
+                            Export browser cookies using an extension like "Get cookies.txt LOCALLY" (Chrome/Firefox).
+                            Cookies enable access to age-restricted content and authenticated downloads.
+                          </p>
+                          <div className="mt-2 p-2 rounded-lg bg-yellow-900/20 border border-yellow-700/30">
+                            <p className="text-xs text-yellow-400">
+                              <strong>Important:</strong> Cookies expire after a period of time (usually 1-2 weeks). If downloads start failing with "Sign in to confirm you're not a bot" errors, re-export fresh cookies from your browser and update the path.
+                            </p>
+                          </div>
+                        </div>
+
+                        {backendTestResult && (
+                          <div className={`rounded-lg p-3 text-sm ${
+                            backendTestResult.startsWith('✓')
+                              ? 'bg-green-900/30 border border-green-700/50 text-green-400'
+                              : 'bg-red-900/30 border border-red-700/50 text-red-400'
+                          }`}>
+                            {backendTestResult}
+                          </div>
+                        )}
+
+                        <div className="flex gap-3">
+                          <button
+                            onClick={() => updateAcquisitionBackend(acquisitionSettings.active_backend, backendCookiesFile)}
+                            disabled={backendBusy}
+                            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                          >
+                            {backendBusy ? 'Saving...' : 'Save Configuration'}
+                          </button>
+                          <button
+                            onClick={() => testAcquisitionBackend(acquisitionSettings.active_backend)}
+                            disabled={backendBusy}
+                            className="rounded-xl bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600 disabled:opacity-50"
+                          >
+                            {backendBusy ? 'Testing...' : 'Test Connection'}
+                          </button>
+                        </div>
+
+                        <div className="pt-3 border-t border-gray-800">
+                          <details className="text-xs text-gray-500">
+                            <summary className="cursor-pointer hover:text-gray-400">
+                              How to export cookies from your browser
+                            </summary>
+                            <div className="mt-3 space-y-2 pl-4">
+                              <p><strong>Chrome/Edge:</strong></p>
+                              <ol className="list-decimal list-inside space-y-1">
+                                <li>Install "Get cookies.txt LOCALLY" extension</li>
+                                <li>Navigate to youtube.com (while logged in)</li>
+                                <li>Click the extension icon and select "Export"</li>
+                                <li>Save the file and enter its path above</li>
+                              </ol>
+                              <p className="pt-2"><strong>Firefox:</strong></p>
+                              <ol className="list-decimal list-inside space-y-1">
+                                <li>Install "cookies.txt" extension</li>
+                                <li>Navigate to youtube.com (while logged in)</li>
+                                <li>Click the extension icon and export cookies</li>
+                                <li>Save the file and enter its path above</li>
+                              </ol>
+                            </div>
+                          </details>
+
+                          <details className="text-xs text-gray-500 mt-2">
+                            <summary className="cursor-pointer hover:text-gray-400">
+                              Troubleshooting: "Sign in to confirm you're not a bot" error
+                            </summary>
+                            <div className="mt-3 space-y-2 pl-4">
+                              <p><strong>This error means your cookies are expired or invalid. Try these steps:</strong></p>
+                              <ol className="list-decimal list-inside space-y-1">
+                                <li>Make sure you're logged into YouTube in your browser</li>
+                                <li>Export fresh cookies (cookies expire every 1-2 weeks)</li>
+                                <li>Verify the cookies file path is correct (use absolute path, not relative)</li>
+                                <li>Check the file exists: run <code className="bg-gray-800 px-1 rounded">ls -la /path/to/cookies.txt</code></li>
+                                <li>After updating cookies, click "Save Configuration" then "Test Connection"</li>
+                                <li>If still failing, try logging out and back into YouTube, then re-export cookies</li>
+                              </ol>
+                            </div>
+                          </details>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </section>
+
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     <button
@@ -1638,6 +2278,381 @@ export default function LibraryPage() {
                     </div>
                   </section>
                 </div>
+
+                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
+                  <div className="flex items-center gap-3">
+                    <InformationCircleIcon className="h-5 w-5 text-gray-300" />
+                    <h2 className="text-xl font-semibold">Song Metadata</h2>
+                  </div>
+                  <p className="text-sm text-gray-400 mt-2">
+                    Review stored songs and edit metadata. Updates will reconcile artist and album
+                    records when possible.
+                  </p>
+
+                  <div className="mt-5 grid gap-6 lg:grid-cols-[1.4fr_0.9fr]">
+                    <div className="space-y-4">
+                      <div className="flex flex-wrap items-center gap-3">
+                        <div className="relative flex-1 min-w-[220px]">
+                          <MagnifyingGlassIcon className="h-4 w-4 text-gray-500 absolute left-3 top-3" />
+                          <input
+                            value={catalogQuery}
+                            onChange={(e) => {
+                              setCatalogQuery(e.target.value);
+                              setCatalogPage(1);
+                            }}
+                            className="w-full rounded-xl bg-gray-800 pl-9 pr-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-white/30"
+                            placeholder="Search by song, artist, or album"
+                          />
+                        </div>
+                        <select
+                          value={catalogPageSize}
+                          onChange={(e) => {
+                            setCatalogPageSize(Number(e.target.value));
+                            setCatalogPage(1);
+                          }}
+                          className="rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                        >
+                          {[10, 25, 50, 100].map((value) => (
+                            <option key={value} value={value}>
+                              {value} per page
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+
+                      {catalogError && (
+                        <p className="text-sm text-red-300">{catalogError}</p>
+                      )}
+
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead className="text-gray-400">
+                            <tr>
+                              <th className="py-2 pr-4">Title</th>
+                              <th className="py-2 pr-4">Artist</th>
+                              <th className="py-2 pr-4">Album</th>
+                              <th className="py-2 pr-4">Status</th>
+                              <th className="py-2 pr-2 text-right">Info</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {catalogItems.length === 0 && (
+                              <tr>
+                                <td colSpan={5} className="py-6 text-gray-500">
+                                  No songs found in the metadata catalog yet.
+                                </td>
+                              </tr>
+                            )}
+                            {catalogItems.map((item) => {
+                              const selected = item.sha_id === selectedSongId;
+                              return (
+                                <tr
+                                  key={item.sha_id}
+                                  className={`border-t border-gray-800 ${
+                                    selected ? 'bg-white/5' : ''
+                                  }`}
+                                >
+                                  <td className="py-3 pr-4">
+                                    <p className="font-medium text-white">
+                                      {item.title || 'Untitled'}
+                                    </p>
+                                    {item.track_number && (
+                                      <p className="text-xs text-gray-500">
+                                        Track {item.track_number}
+                                      </p>
+                                    )}
+                                  </td>
+                                  <td className="py-3 pr-4 text-gray-300">
+                                    {item.artists?.[0] || 'Unknown'}
+                                  </td>
+                                  <td className="py-3 pr-4 text-gray-400">
+                                    {item.album || '--'}
+                                  </td>
+                                  <td className="py-3 pr-4">
+                                    <span
+                                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                                        item.verified ? 'bg-emerald-500/20 text-emerald-200' : 'bg-gray-800 text-gray-300'
+                                      }`}
+                                    >
+                                      {item.verified ? 'Verified' : 'Unverified'}
+                                    </span>
+                                  </td>
+                                  <td className="py-3 pr-2 text-right">
+                                    <button
+                                      onClick={() => handleSelectSong(item.sha_id)}
+                                      className="inline-flex items-center justify-center rounded-full border border-gray-700 p-2 text-gray-300 hover:border-gray-500 hover:text-white"
+                                      title="View song info"
+                                    >
+                                      <InformationCircleIcon className="h-4 w-4" />
+                                    </button>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-gray-400">
+                        <span>
+                          {catalogTotal} song{catalogTotal === 1 ? '' : 's'} · Page {catalogPage} of{' '}
+                          {catalogPageCount}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setCatalogPage((prev) => Math.max(1, prev - 1))}
+                            disabled={catalogPage <= 1}
+                            className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                          >
+                            Prev
+                          </button>
+                          <button
+                            onClick={() =>
+                              setCatalogPage((prev) => Math.min(catalogPageCount, prev + 1))
+                            }
+                            disabled={catalogPage >= catalogPageCount}
+                            className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+
+                    <aside className="rounded-2xl border border-gray-800 bg-gray-950/40 p-5 lg:sticky lg:top-6">
+                      <div className="flex items-center justify-between">
+                        <h3 className="text-lg font-semibold">Song Info</h3>
+                        {selectedSongId && (
+                          <button
+                            onClick={() => setSelectedSongId(null)}
+                            className="rounded-full border border-gray-700 p-1 text-gray-400 hover:border-gray-500 hover:text-white"
+                            title="Close"
+                          >
+                            <XMarkIcon className="h-4 w-4" />
+                          </button>
+                        )}
+                      </div>
+
+                      {!selectedSongId && (
+                        <p className="mt-4 text-sm text-gray-500">
+                          Select a song to view and edit metadata.
+                        </p>
+                      )}
+
+                      {songDetailBusy && (
+                        <p className="mt-4 text-sm text-gray-400">Loading song metadata…</p>
+                      )}
+
+                      {songDetailError && (
+                        <p className="mt-4 text-sm text-red-300">{songDetailError}</p>
+                      )}
+
+                      {songDetail && !songDetailBusy && (
+                        <div className="mt-4 space-y-4">
+                          <div className="flex items-center justify-between">
+                            <div>
+                              <p className="text-xs uppercase text-gray-500">Title</p>
+                              <p className="text-lg font-semibold text-white">
+                                {songDetail.title || 'Untitled'}
+                              </p>
+                            </div>
+                            {!songEditMode && (
+                              <button
+                                onClick={handleSongEdit}
+                                className="inline-flex items-center gap-2 rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:border-gray-500"
+                              >
+                                <PencilSquareIcon className="h-4 w-4" />
+                                Edit
+                              </button>
+                            )}
+                          </div>
+
+                          {(songSaveError || songSaveMessage) && (
+                            <div className="rounded-xl border border-gray-800 bg-gray-900/60 px-3 py-2 text-sm">
+                              {songSaveError && (
+                                <p className="text-sm text-red-300">{songSaveError}</p>
+                              )}
+                              {songSaveMessage && (
+                                <p className="text-sm text-emerald-300">{songSaveMessage}</p>
+                              )}
+                            </div>
+                          )}
+
+                          {songEditMode ? (
+                            <div className="space-y-3 text-sm text-gray-300">
+                              <label className="block">
+                                Song title
+                                <input
+                                  value={songEditForm.title}
+                                  onChange={(e) =>
+                                    setSongEditForm((prev) => ({
+                                      ...prev,
+                                      title: e.target.value,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                Artist (comma-separated)
+                                <input
+                                  value={songEditForm.artist}
+                                  onChange={(e) =>
+                                    setSongEditForm((prev) => ({
+                                      ...prev,
+                                      artist: e.target.value,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                Album
+                                <input
+                                  value={songEditForm.album}
+                                  onChange={(e) =>
+                                    setSongEditForm((prev) => ({
+                                      ...prev,
+                                      album: e.target.value,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                />
+                              </label>
+                              <label className="block">
+                                Genre (comma-separated)
+                                <input
+                                  value={songEditForm.genre}
+                                  onChange={(e) =>
+                                    setSongEditForm((prev) => ({
+                                      ...prev,
+                                      genre: e.target.value,
+                                    }))
+                                  }
+                                  className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                />
+                              </label>
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <label className="block">
+                                  Release year
+                                  <input
+                                    value={songEditForm.releaseYear}
+                                    onChange={(e) =>
+                                      setSongEditForm((prev) => ({
+                                        ...prev,
+                                        releaseYear: e.target.value,
+                                      }))
+                                    }
+                                    className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                  />
+                                </label>
+                                <label className="block">
+                                  Track number
+                                  <input
+                                    value={songEditForm.trackNumber}
+                                    onChange={(e) =>
+                                      setSongEditForm((prev) => ({
+                                        ...prev,
+                                        trackNumber: e.target.value,
+                                      }))
+                                    }
+                                    className="mt-1 w-full rounded-xl bg-gray-800 px-3 py-2 text-sm text-white"
+                                  />
+                                </label>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-3 pt-2">
+                                <button
+                                  onClick={handleSongSave}
+                                  disabled={songSaveBusy}
+                                  className="rounded-full bg-white px-4 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                                >
+                                  {songSaveBusy ? 'Saving...' : 'Save changes'}
+                                </button>
+                                <button
+                                  onClick={handleSongCancel}
+                                  disabled={songSaveBusy}
+                                  className="rounded-full border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:border-gray-500 disabled:opacity-50"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="space-y-3 text-sm text-gray-300">
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Artist</p>
+                                {songDetail.primary_artist_id ? (
+                                  <Link
+                                    href={`/artist/${songDetail.primary_artist_id}`}
+                                    className="text-white hover:underline"
+                                  >
+                                    {songDetail.primary_artist_name || songDetail.artists?.[0]}{' '}
+                                    <span className="text-xs text-gray-500">(profile)</span>
+                                  </Link>
+                                ) : (
+                                  <p className="text-white">
+                                    {songDetail.primary_artist_name ||
+                                      songDetail.artists?.[0] ||
+                                      '--'}
+                                  </p>
+                                )}
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Album</p>
+                                {songDetail.album_id ? (
+                                  <Link
+                                    href={`/album/${songDetail.album_id}`}
+                                    className="text-white hover:underline"
+                                  >
+                                    {songDetail.album || 'Unknown album'}{' '}
+                                    <span className="text-xs text-gray-500">(album)</span>
+                                  </Link>
+                                ) : (
+                                  <p className="text-white">{songDetail.album || '--'}</p>
+                                )}
+                              </div>
+                              <div className="grid gap-3 md:grid-cols-2">
+                                <div>
+                                  <p className="text-xs uppercase text-gray-500">Track</p>
+                                  <p className="text-white">
+                                    {songDetail.track_number ?? '--'}
+                                  </p>
+                                </div>
+                                <div>
+                                  <p className="text-xs uppercase text-gray-500">Release</p>
+                                  <p className="text-white">
+                                    {songDetail.album_release_date ||
+                                      songDetail.album_release_year ||
+                                      songDetail.release_year ||
+                                      '--'}
+                                  </p>
+                                </div>
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Genres</p>
+                                <p className="text-white">{formatList(songDetail.genres)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Producers</p>
+                                <p className="text-white">{formatList(songDetail.producers)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Labels</p>
+                                <p className="text-white">{formatList(songDetail.labels)}</p>
+                              </div>
+                              <div>
+                                <p className="text-xs uppercase text-gray-500">Verified</p>
+                                <p className="text-white">
+                                  {songDetail.verified ? 'Yes' : 'No'}
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </aside>
+                  </div>
+                </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center gap-3">

@@ -14,10 +14,13 @@
 !/preprocessed_cache/pcm_norm/.gitkeep
 !/preprocessed_cache/embeddings/.gitkeep
 !/preprocessed_cache/song_cache/.gitkeep
+/.embeddings/*
+!/embeddings/.gitkeep
 
 #agent files
 AGENTS.md
 CLAUDE.md
+GEMINI.md
 /.claude
 
 #planning

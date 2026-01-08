@@ -1,0 +1,231 @@
+This helps a little, unfortunately. To understand the errors better, take the following song
+  names (and occasionally incorrectly inferred artist name) as they fail verification:[1/352]
+  Verifying: 800 - hot-n-fun
+    Attempting with existing metadata: 800 - hot-n-fun
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: 800...
+      ✓ Found artist on Wikidata: Q746396
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [2/352] Verifying: Unknown Artist - 1984 Seireki 2000 Nen Ni Mukete 2012 Remastered
+    Attempting title-only search: 1984 Seireki 2000 Nen Ni Mukete 2012 Remastered
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying simplified title: '1984 Seireki 2000 Nen Ni Mukete 2012'...
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [3/352] Verifying: Unknown Artist - aespa Next Level MV
+    Attempting title-only search: aespa Next Level MV
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Tryingel'...
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [4/352] Verifying: Unknown Artist - aespa Savage MV
+    Attempting title-only search: aespa Savage MV
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying simplified title: 'aespa Savage'...
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [5/352] Verifying: Unknown Artist - aespa Spicy MV
+    Attempting title-only search: aespa Spicy MV
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying simplified title: 'aespa Spicy'...
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [6/352] Verifying: Unknown Artist - aespa Supernova MV
+    Attempting title-only search: aespa Supernova MV
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying simplified title: 'aespa Supernno match found
+    ✗ No match found from any source
+  [7/352] Verifying: Unknown Artist - aespa Whiplash MV
+    Attempting title-only search: aespa Whiplash MV
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying simplified title: 'aespa Whiplash'...
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [8/352] Verifying: All - I_Need_Is_Bass
+    Attempting with existing metadata: All - I_Need_Is_Bass
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: All...
+      ✓ Found artist on Wikidata: Q655020
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [9/352] Verifying: All - Revved_Up_with_No_Place_to_Go
+    Attempting with existing metadata: All - Revved_Up_with_No_Place_to_Go
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidrtist on Wikidata: Q655020
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [10/352] Verifying: All - U_Need
+    Attempting with existing metadata: All - U_Need
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: All...
+      ✓ Found artist on Wikidata: Q655020
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [11/352] Verifying: ALLEYCVT_ - _BACK2LIFE_OFFICIAL_VISUALIZER
+    Attempting with existing metadata: ALLEYCVT_ - _BACK2LIFE_OFFICIAL_VISUALIZER
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: ALLEYCVT_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [12/352] Verifying: ALLEYCVT_ - _GLITCH_OFFICIAL_VISUALIZER
+    Attempting with existing metadata: ALLEYCVT_ - _GLITCH_OFFICIAL_VISUALIZER
+       match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: ALLEYCVT_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [13/352] Verifying: ALLEYCVT_ - _THROW_IT_DOWN_OFFICIAL_VISUALIZER
+    Attempting with existing metadata: ALLEYCVT_ - _THROW_IT_DOWN_OFFICIAL_VISUALIZER
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: ALLEYCVT_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [14/352] Verifying: ALLEYCVT_LEVEL_UP_ - _BELIEVE_Dubstep_Monstercat
+    Attempting with existing metadata: ALLEYCVT_LEVEL_UP_ - _BELIEVE_Dubstep_Monstercat
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: ALLEYCVT_LEVEL_UP_...
+      ✗ No artist found on Wikidata
+    ✗ All  ✗ No match found from any source
+  [15/352] Verifying: Alleycvt_x_Levity_ - _One_For_You_Visualizer
+    Attempting with existing metadata: Alleycvt_x_Levity_ - _One_For_You_Visualizer
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Alleycvt_x_Levity_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [16/352] Verifying: Animals - 2020_Remaster
+    Attempting with existing metadata: Animals - 2020_Remaster
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Animals...
+      ✓ Found artist on Wikidata: Q27725748
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [17/352] Verifying: AOA_ - _Miniskirt_M_V
+    Attempting with existing metadata: AOA_ - _Miniskirt_M_V
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠   → Trying Wikidata for artist: AOA_...
+      ✓ Found artist on Wikidata: Q19989723
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [18/352] Verifying: Arctic_Monkeys_ - _Snap_Out_Of_It_Official_Audio
+    Attempting with existing metadata: Arctic_Monkeys_ - _Snap_Out_Of_It_Official_Audio
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Arctic_Monkeys_...
+      ✓ Found artist on Wikidata: Q71154700
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [19/352] Verifying: Are - You_The_One
+    Attempting with existing metadata: Are - You_The_One
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Are...
+      ✓ Found artist on Wikidata: Q878
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [20/352] Verifying: Ask - DNA
+    Attempting with eying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Ask...
+      ✓ Found artist on Wikidata: Q10419770
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [21/352] Verifying: Audioslave_ - _Be_Yourself_Album_Version
+    Attempting with existing metadata: Audioslave_ - _Be_Yourself_Album_Version
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Audioslave_...
+      ✓ Found artist on Wikidata: Q781057
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [22/352] Verifying: Autumn - Nocturne
+    Attempting with existing metadata: Autumn - Nocturne
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Autumn...
+      ✓ Found artist on Wikidata: Q4827123
+    ✗ All sources exhausted - no match found
+    �] Verifying: AVAION_Sofiya_Nzau_ - _WACUKA_Official_Visualizer
+    Attempting with existing metadata: AVAION_Sofiya_Nzau_ - _WACUKA_Official_Visualizer
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: AVAION_Sofiya_Nzau_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [24/352] Verifying: Baby - Shea
+    Attempting with existing metadata: Baby - Shea
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Baby...
+      ✓ Found artist on Wikidata: Q797838
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [25/352] Verifying: Barry_Can_t_Swim_O_Flynn_ - _Kimpton_Official_Audio
+    Attempting with existing metadata: Barry_Can_t_Swim_O_Flynn_ - _Kimpton_Official_Audio
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ S   → Trying Wikidata for artist: Barry_Can_t_Swim_O_Flynn_...
+      ✗ No artist found on Wikidata
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source
+  [26/352] Verifying: Basement_ - _Covet_Official_Visualizer
+    Attempting with existing metadata: Basement_ - _Covet_Official_Visualizer
+      → Trying MusicBrainz...
+      ✗ No match from MusicBrainz
+      ⚠ Spotify not configured (skipping)
+      → Trying Wikidata for artist: Basement_...
+      ✓ Found artist on Wikidata: Q32846
+    ✗ All sources exhausted - no match found
+    ✗ No match found from any source. The actual song names and artists are: 1. 1-800-hot-n-fun
+  by LE SSERAFIM, 2. 1984 (Seireki 2000 Nen Ni Mukete) by Junko Yagami, 3. Next Level by aespa,
+  4. Savage by aespa, 5. Spicy by aespa, 6. Supernova by aespa, 7. Whiplash by aespa, 8. All I
+  need is bass by PEEKABOO, 9. All revved up with no place to go by meatloaf, 10. All U Need by
+  Kangol, 11. BACK2LIFE by ALLEYCVT, 12. GLITCH by ALLEYCVT, 13. THROW IT DOWN by ALLEYCVT, 14.
+  BELIEVE by ALLEYCVT, 15. One For You by ALLEYCVT and another artist Levity, 16. Animals by
+  Nickelback, 17. Miniskirt by AOA, 18. Snap out of it by Arctic Monkeys, 19. Are you the one by
+  Basement, 20. Ask DNA by The Seatbelts, 21. Be Yourself by Audioslave, 22. Autumn Nocturne by
+  Josef Myrow, 23. WACUKA by AVAION, 24. Baby Shea by Ovlov, 25. Kimpton by Barry Can't Swim,
+  26. Covet by Basement.

@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from backend import app_settings
 from backend.db.connection import get_connection
+from backend.db.image_connection import get_image_connection
 
 router = APIRouter()
 
@@ -21,6 +22,7 @@ class SettingsPatch(BaseModel):
 class ResetRequest(BaseModel):
     clear_embeddings: bool = False
     clear_hashed_music: bool = False
+    clear_artist_album: bool = False
     confirm: str | None = None
 
 
@@ -63,7 +65,11 @@ async def reset_storage(payload: ResetRequest) -> dict[str, Any]:
         raise HTTPException(
             status_code=400, detail="Confirmation token missing or invalid."
         )
-    if not payload.clear_embeddings and not payload.clear_hashed_music:
+    if (
+        not payload.clear_embeddings
+        and not payload.clear_hashed_music
+        and not payload.clear_artist_album
+    ):
         raise HTTPException(status_code=400, detail="No reset options selected.")
 
     result: dict[str, int] = {
@@ -71,6 +77,12 @@ async def reset_storage(payload: ResetRequest) -> dict[str, Any]:
         "embeddings_deleted": 0,
         "song_cache_entries_deleted": 0,
         "embedding_files_deleted": 0,
+        "albums_deleted": 0,
+        "album_tracks_deleted": 0,
+        "artist_profiles_deleted": 0,
+        "album_images_deleted": 0,
+        "song_images_deleted": 0,
+        "image_assets_deleted": 0,
     }
 
     with get_connection() as conn:
@@ -85,11 +97,25 @@ async def reset_storage(payload: ResetRequest) -> dict[str, Any]:
                 cur.execute("SELECT COUNT(*) FROM embeddings.vggish_embeddings")
                 result["embeddings_deleted"] = cur.fetchone()[0]
                 cur.execute("DELETE FROM embeddings.vggish_embeddings")
+            if payload.clear_artist_album:
+                cur.execute("SELECT COUNT(*) FROM metadata.album_tracks")
+                result["album_tracks_deleted"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM metadata.albums")
+                result["albums_deleted"] = cur.fetchone()[0]
+                cur.execute("DELETE FROM metadata.album_tracks")
+                cur.execute("DELETE FROM metadata.albums")
+                cur.execute(
+                    """
+                    UPDATE metadata.songs
+                    SET
+                        musicbrainz_release_id = NULL,
+                        musicbrainz_release_group_id = NULL
+                    """
+                )
         conn.commit()
 
     paths = app_settings.resolve_paths()
-    preprocessed = paths["preprocessed_cache_dir"]
-    embedding_dir = preprocessed / "embeddings"
+    embedding_dir = app_settings.REPO_ROOT / ".embeddings"
     if payload.clear_embeddings or payload.clear_hashed_music:
         try:
             result["embedding_files_deleted"] = _clear_dir_contents(embedding_dir)
@@ -102,5 +128,22 @@ async def reset_storage(payload: ResetRequest) -> dict[str, Any]:
             result["song_cache_entries_deleted"] = _clear_dir_contents(song_cache_dir)
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    if payload.clear_artist_album:
+        with get_image_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) FROM media.song_images")
+                result["song_images_deleted"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media.album_images")
+                result["album_images_deleted"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media.artist_profiles")
+                result["artist_profiles_deleted"] = cur.fetchone()[0]
+                cur.execute("SELECT COUNT(*) FROM media.image_assets")
+                result["image_assets_deleted"] = cur.fetchone()[0]
+                cur.execute("DELETE FROM media.song_images")
+                cur.execute("DELETE FROM media.album_images")
+                cur.execute("DELETE FROM media.artist_profiles")
+                cur.execute("DELETE FROM media.image_assets")
+            conn.commit()
 
     return result
