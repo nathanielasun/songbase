@@ -67,6 +67,40 @@ npm run dev
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 
+## Optional: Multi-Source Metadata Configuration
+
+The metadata pipeline supports fetching images from multiple sources. **Spotify API access is optional** but recommended for better image coverage.
+
+### Spotify API Setup (Optional)
+
+To enable Spotify as a metadata source:
+
+1. Create a Spotify Developer account at https://developer.spotify.com/dashboard
+2. Click "Create App" and fill in the details (name/description)
+3. Copy your **Client ID** and **Client Secret**
+4. Set environment variables:
+
+```bash
+export SPOTIFY_CLIENT_ID="your_client_id_here"
+export SPOTIFY_CLIENT_SECRET="your_client_secret_here"
+```
+
+Or add to your `~/.bashrc` / `~/.zshrc`:
+```bash
+echo 'export SPOTIFY_CLIENT_ID="your_client_id_here"' >> ~/.bashrc
+echo 'export SPOTIFY_CLIENT_SECRET="your_client_secret_here"' >> ~/.bashrc
+source ~/.bashrc
+```
+
+**Note**: The pipeline will automatically use Spotify when credentials are configured. If not configured, it will fall back to free sources (MusicBrainz, Wikidata, Cover Art Archive).
+
+### Metadata Sources
+
+- **MusicBrainz** (Primary, always enabled) - Free music encyclopedia
+- **Cover Art Archive** (Always enabled) - Free album covers
+- **Wikidata** (Always enabled) - Free artist images from Wikimedia Commons
+- **Spotify** (Optional) - Commercial music service (requires API key)
+
 ## Project Structure
 
 ```
@@ -109,6 +143,9 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 - **Seed sources**: Use the Downloads tab to insert `sources.jsonl` entries into the queue.
 - **Last seed timestamp**: The Sources view displays when the queue was last seeded.
 - **Queue cleanup**: The Downloads tab includes confirmation-protected controls to clear sources.jsonl entries or the pipeline queue.
+- **Album metadata sync**: Image/profile sync also caches album metadata + track lists for linking and browsing.
+- **Manual linking**: The Database tab lets you attach unassigned songs to existing album records.
+- **Artwork serving**: `/api/library/images/*` endpoints serve song, album, and artist artwork to the frontend.
 
 When the backend starts and database URLs are missing, it will automatically bootstrap the local Postgres cluster under `.metadata/`.
 
@@ -172,6 +209,7 @@ python backend/db/build_postgres_bundle.py --write-manifest
 ## Image Metadata Database
 
 Cover art and artist profiles are stored in a separate Postgres database. Apply the image migrations and run the image pipeline with both database URLs set.
+The image sync step also hydrates album metadata + track lists into the main metadata database for linking.
 
 ```bash
 SONGBASE_IMAGE_DATABASE_URL=postgres://... python backend/db/migrate_images.py

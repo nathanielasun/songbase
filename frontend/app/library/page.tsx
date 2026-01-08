@@ -7,6 +7,8 @@ import {
   ChartBarIcon,
   MagnifyingGlassIcon,
   QueueListIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
 
@@ -189,6 +191,8 @@ export default function LibraryPage() {
   const [linkBusy, setLinkBusy] = useState(false);
   const [linkMessage, setLinkMessage] = useState<string | null>(null);
   const [linkError, setLinkError] = useState<string | null>(null);
+  const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
+  const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(true);
 
   const [searchTitle, setSearchTitle] = useState('');
   const [searchArtist, setSearchArtist] = useState('');
@@ -1026,10 +1030,18 @@ export default function LibraryPage() {
               <div className="space-y-6">
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex flex-wrap items-center justify-between gap-4">
-                    <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsSourcesCollapsed(!isSourcesCollapsed)}
+                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+                    >
                       <QueueListIcon className="h-5 w-5 text-gray-300" />
                       <h2 className="text-xl font-semibold">Sources.jsonl</h2>
-                    </div>
+                      {isSourcesCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
+                      )}
+                    </button>
                     <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
                       <span>{sourceMeta?.path ?? 'backend/processing/acquisition_pipeline/sources.jsonl'}</span>
                       {sourceMeta?.queue_available ? (
@@ -1070,72 +1082,77 @@ export default function LibraryPage() {
                       </button>
                     </div>
                   </div>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Items listed in the local sources file that are not yet in the pipeline queue.
-                  </p>
-                  {!sourceMeta?.queue_available && (
-                    <p className="text-xs text-amber-300 mt-2">
-                      Queue status unavailable (database offline).
-                    </p>
+
+                  {!isSourcesCollapsed && (
+                    <>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Items listed in the local sources file that are not yet in the pipeline queue.
+                      </p>
+                      {!sourceMeta?.queue_available && (
+                        <p className="text-xs text-amber-300 mt-2">
+                          Queue status unavailable (database offline).
+                        </p>
+                      )}
+                      {sourceMeta?.queue_available && (
+                        <p className="text-xs text-gray-500 mt-2">
+                          Sources already queued appear in the pipeline list below.
+                        </p>
+                      )}
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead className="text-gray-400">
+                            <tr>
+                              <th className="py-2 pr-4">Title</th>
+                              <th className="py-2 pr-4">Artist</th>
+                              <th className="py-2 pr-4">Queued</th>
+                              <th className="py-2 pr-4">Status</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {visibleSourceItems.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="py-4 text-gray-500">
+                                  {sourceMeta?.queue_available
+                                    ? 'All sources.jsonl entries are already in the pipeline queue.'
+                                    : 'No sources.jsonl entries found.'}
+                                </td>
+                              </tr>
+                            )}
+                            {visibleSourceItems.map((item, index) => (
+                              <tr key={`${item.title}-${index}`} className="border-t border-gray-800">
+                                <td className="py-3 pr-4">
+                                  <p className="font-medium">{item.title}</p>
+                                  {item.album && (
+                                    <p className="text-xs text-gray-500">{item.album}</p>
+                                  )}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-300">
+                                  {item.artist || 'Unknown'}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-300">
+                                  {item.queued === null ? '--' : item.queued ? 'Yes' : 'No'}
+                                </td>
+                                <td className="py-3 pr-4">
+                                  {item.queue_status ? (
+                                    <span
+                                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                                        statusStyles[item.queue_status] ||
+                                        'bg-gray-800 text-gray-200'
+                                      }`}
+                                    >
+                                      {item.queue_status.replace(/_/g, ' ')}
+                                    </span>
+                                  ) : (
+                                    <span className="text-xs text-gray-500">--</span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   )}
-                  {sourceMeta?.queue_available && (
-                    <p className="text-xs text-gray-500 mt-2">
-                      Sources already queued appear in the pipeline list below.
-                    </p>
-                  )}
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead className="text-gray-400">
-                        <tr>
-                          <th className="py-2 pr-4">Title</th>
-                          <th className="py-2 pr-4">Artist</th>
-                          <th className="py-2 pr-4">Queued</th>
-                          <th className="py-2 pr-4">Status</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {visibleSourceItems.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="py-4 text-gray-500">
-                              {sourceMeta?.queue_available
-                                ? 'All sources.jsonl entries are already in the pipeline queue.'
-                                : 'No sources.jsonl entries found.'}
-                            </td>
-                          </tr>
-                        )}
-                        {visibleSourceItems.map((item, index) => (
-                          <tr key={`${item.title}-${index}`} className="border-t border-gray-800">
-                            <td className="py-3 pr-4">
-                              <p className="font-medium">{item.title}</p>
-                              {item.album && (
-                                <p className="text-xs text-gray-500">{item.album}</p>
-                              )}
-                            </td>
-                            <td className="py-3 pr-4 text-gray-300">
-                              {item.artist || 'Unknown'}
-                            </td>
-                            <td className="py-3 pr-4 text-gray-300">
-                              {item.queued === null ? '--' : item.queued ? 'Yes' : 'No'}
-                            </td>
-                            <td className="py-3 pr-4">
-                              {item.queue_status ? (
-                                <span
-                                  className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                                    statusStyles[item.queue_status] ||
-                                    'bg-gray-800 text-gray-200'
-                                  }`}
-                                >
-                                  {item.queue_status.replace(/_/g, ' ')}
-                                </span>
-                              ) : (
-                                <span className="text-xs text-gray-500">--</span>
-                              )}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
@@ -1315,10 +1332,18 @@ export default function LibraryPage() {
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center justify-between flex-wrap gap-4">
-                    <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsQueueCollapsed(!isQueueCollapsed)}
+                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+                    >
                       <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
                       <h2 className="text-xl font-semibold">Queue Status</h2>
-                    </div>
+                      {isQueueCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
+                      )}
+                    </button>
                     <button
                       onClick={handleClearQueue}
                       disabled={busy}
@@ -1341,106 +1366,110 @@ export default function LibraryPage() {
                     ))}
                   </div>
 
-                  <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-400">
-                    <div className="flex items-center gap-2">
-                      <span>Show</span>
-                      <select
-                        value={queuePageSize}
-                        onChange={(e) => {
-                          setQueuePageSize(Number(e.target.value));
-                          setQueuePage(1);
-                        }}
-                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 focus:outline-none"
-                      >
-                        {[10, 25, 50, 100].map((size) => (
-                          <option key={size} value={size}>
-                            {size}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <span>
-                      {queueTotal === 0
-                        ? 'No queued songs'
-                        : `Showing ${queueOffset + 1}-${queueOffset + queueItems.length} of ${queueTotal}`}
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => setQueuePage((prev) => Math.max(1, prev - 1))}
-                        disabled={queuePage <= 1}
-                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
-                      >
-                        Prev
-                      </button>
-                      <span>
-                        Page {queuePage} of {queuePageCount}
-                      </span>
-                      <button
-                        onClick={() =>
-                          setQueuePage((prev) => Math.min(queuePageCount, prev + 1))
-                        }
-                        disabled={queuePage >= queuePageCount}
-                        className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
-                      >
-                        Next
-                      </button>
-                    </div>
-                  </div>
+                  {!isQueueCollapsed && (
+                    <>
+                      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 text-xs text-gray-400">
+                        <div className="flex items-center gap-2">
+                          <span>Show</span>
+                          <select
+                            value={queuePageSize}
+                            onChange={(e) => {
+                              setQueuePageSize(Number(e.target.value));
+                              setQueuePage(1);
+                            }}
+                            className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 focus:outline-none"
+                          >
+                            {[10, 25, 50, 100].map((size) => (
+                              <option key={size} value={size}>
+                                {size}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <span>
+                          {queueTotal === 0
+                            ? 'No queued songs'
+                            : `Showing ${queueOffset + 1}-${queueOffset + queueItems.length} of ${queueTotal}`}
+                        </span>
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => setQueuePage((prev) => Math.max(1, prev - 1))}
+                            disabled={queuePage <= 1}
+                            className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                          >
+                            Prev
+                          </button>
+                          <span>
+                            Page {queuePage} of {queuePageCount}
+                          </span>
+                          <button
+                            onClick={() =>
+                              setQueuePage((prev) => Math.min(queuePageCount, prev + 1))
+                            }
+                            disabled={queuePage >= queuePageCount}
+                            className="rounded-full border border-gray-800 bg-gray-900 px-3 py-1 text-xs text-gray-200 disabled:opacity-50"
+                          >
+                            Next
+                          </button>
+                        </div>
+                      </div>
 
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead className="text-gray-400">
-                        <tr>
-                          <th className="py-2 pr-4">Title</th>
-                          <th className="py-2 pr-4">Artist</th>
-                          <th className="py-2 pr-4">Status</th>
-                          <th className="py-2 pr-4">Attempts</th>
-                          <th className="py-2 pr-4">Updated</th>
-                          <th className="py-2 pr-4">Error</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {queueItems.length === 0 && (
-                          <tr>
-                            <td colSpan={6} className="py-6 text-gray-500">
-                              No queued songs yet.
-                            </td>
-                          </tr>
-                        )}
-                        {queueItems.map((item) => (
-                          <tr key={item.queue_id} className="border-t border-gray-800">
-                            <td className="py-3 pr-4">
-                              <p className="font-medium">{item.title}</p>
-                              {item.album && (
-                                <p className="text-xs text-gray-500">{item.album}</p>
-                              )}
-                            </td>
-                            <td className="py-3 pr-4 text-gray-300">
-                              {item.artist || 'Unknown'}
-                            </td>
-                            <td className="py-3 pr-4">
-                              <span
-                                className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                                  statusStyles[item.status] || 'bg-gray-800 text-gray-200'
-                                }`}
-                              >
-                                {item.status.replace(/_/g, ' ')}
-                              </span>
-                            </td>
-                            <td className="py-3 pr-4 text-gray-300">
-                              {item.attempts ?? 0}
-                            </td>
-                            <td className="py-3 pr-4 text-gray-400">
-                              {item.updated_at ? new Date(item.updated_at).toLocaleString() : '--'}
-                            </td>
-                            <td className="py-3 pr-4 text-xs text-red-300">
-                              {item.last_error || '--'}
-                            </td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
+                      <div className="mt-4 overflow-x-auto">
+                        <table className="w-full text-left text-sm">
+                          <thead className="text-gray-400">
+                            <tr>
+                              <th className="py-2 pr-4">Title</th>
+                              <th className="py-2 pr-4">Artist</th>
+                              <th className="py-2 pr-4">Status</th>
+                              <th className="py-2 pr-4">Attempts</th>
+                              <th className="py-2 pr-4">Updated</th>
+                              <th className="py-2 pr-4">Error</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {queueItems.length === 0 && (
+                              <tr>
+                                <td colSpan={6} className="py-6 text-gray-500">
+                                  No queued songs yet.
+                                </td>
+                              </tr>
+                            )}
+                            {queueItems.map((item) => (
+                              <tr key={item.queue_id} className="border-t border-gray-800">
+                                <td className="py-3 pr-4">
+                                  <p className="font-medium">{item.title}</p>
+                                  {item.album && (
+                                    <p className="text-xs text-gray-500">{item.album}</p>
+                                  )}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-300">
+                                  {item.artist || 'Unknown'}
+                                </td>
+                                <td className="py-3 pr-4">
+                                  <span
+                                    className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
+                                      statusStyles[item.status] || 'bg-gray-800 text-gray-200'
+                                    }`}
+                                  >
+                                    {item.status.replace(/_/g, ' ')}
+                                  </span>
+                                </td>
+                                <td className="py-3 pr-4 text-gray-300">
+                                  {item.attempts ?? 0}
+                                </td>
+                                <td className="py-3 pr-4 text-gray-400">
+                                  {item.updated_at ? new Date(item.updated_at).toLocaleString() : '--'}
+                                </td>
+                                <td className="py-3 pr-4 text-xs text-red-300">
+                                  {item.last_error || '--'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">

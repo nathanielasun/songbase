@@ -6,6 +6,7 @@ from typing import Iterable
 from backend.db.connection import get_connection
 
 from . import config
+from .filename_parser import parse_filename, should_parse_filename
 from .musicbrainz_client import RecordingMatch, configure_client, resolve_match
 
 
@@ -105,6 +106,113 @@ def _replace_song_genres(cur, sha_id: str, genres: Iterable[str]) -> None:
         )
 
 
+def _resolve_with_parsing_strategies(
+    title: str,
+    artist: str | None,
+    artists: list[str],
+    album: str | None,
+    duration_sec: int | None,
+    min_score: int | None,
+    rate_limit_seconds: float | None,
+) -> RecordingMatch | None:
+    """
+    Attempt to resolve metadata using intelligent filename parsing.
+
+    Tries multiple strategies in order:
+    1. Use existing metadata (if available)
+    2. Parse filename to extract artist/title and search with parsed data
+    3. Fall back to original title-only search
+
+    Returns the best match found, or None if no valid match exists.
+    """
+    # Strategy 1: Try with existing metadata first (if we have artist info)
+    if artist or artists:
+        match = resolve_match(
+            title,
+            artist,
+            artists=artists,
+            album=album,
+            duration_sec=duration_sec,
+            min_score=min_score,
+            rate_limit_seconds=rate_limit_seconds,
+        )
+        if match:
+            return match
+
+    # Strategy 2: Check if we should parse the filename for additional metadata
+    if should_parse_filename(title, artist):
+        parsed_options = parse_filename(title)
+
+        # Try each parsed option in order of confidence
+        for parsed in parsed_options:
+            if parsed.confidence < 0.5:
+                # Skip low-confidence parses unless we have nothing else
+                break
+
+            # Build artist list for this attempt
+            attempt_artists = []
+            if parsed.artist:
+                attempt_artists.append(parsed.artist)
+            # Add existing artists as fallback
+            if artists:
+                attempt_artists.extend(artists)
+
+            # Attempt resolution with parsed metadata
+            match = resolve_match(
+                parsed.title,
+                parsed.artist,
+                artists=attempt_artists if attempt_artists else None,
+                album=album,
+                duration_sec=duration_sec,
+                min_score=min_score,
+                rate_limit_seconds=rate_limit_seconds,
+            )
+
+            if match:
+                # Validate that the match reasonably corresponds to our parsed data
+                # Check if matched artist is similar to parsed artist
+                if parsed.artist:
+                    from .musicbrainz_client import _best_artist_similarity, _normalize_text
+
+                    parsed_artist_similarity = _best_artist_similarity(
+                        [parsed.artist],
+                        match.artists,
+                    )
+                    # Require decent artist match when we parsed an artist
+                    if parsed_artist_similarity < 0.6:
+                        continue
+
+                    # Also check title similarity
+                    from .musicbrainz_client import _similarity
+
+                    title_similarity = _similarity(
+                        _normalize_text(parsed.title),
+                        _normalize_text(match.title),
+                    )
+                    if title_similarity < 0.7:
+                        continue
+
+                return match
+
+    # Strategy 3: Fall back to original title search (no artist)
+    # This is already attempted within resolve_match when artist searches fail,
+    # but we can try it explicitly with lower thresholds
+    if not artist and not artists:
+        match = resolve_match(
+            title,
+            None,
+            artists=None,
+            album=album,
+            duration_sec=duration_sec,
+            min_score=min_score,
+            rate_limit_seconds=rate_limit_seconds,
+        )
+        if match:
+            return match
+
+    return None
+
+
 def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
     cur.execute(
         """
@@ -153,6 +261,9 @@ def verify_unverified_songs(
     processed = 0
     verified = 0
     skipped = 0
+    total = len(songs)
+
+    print(f"\nStarting metadata verification for {total} song(s)...\n")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -164,8 +275,13 @@ def verify_unverified_songs(
                 album = song.get("album") or None
                 duration_sec = song.get("duration_sec")
 
+                # Display current status
+                artist_display = artist or "Unknown Artist"
+                print(f"[{processed}/{total}] Verifying: {artist_display} - {title}")
+
                 try:
-                    match = resolve_match(
+                    # Use intelligent parsing strategies for better metadata resolution
+                    match = _resolve_with_parsing_strategies(
                         title,
                         artist,
                         artists=artists,
@@ -174,14 +290,17 @@ def verify_unverified_songs(
                         min_score=min_score,
                         rate_limit_seconds=rate_limit_seconds,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ✗ Error: {str(e)}")
                     skipped += 1
                     continue
                 if not match:
+                    print(f"  ✗ No match found")
                     skipped += 1
                     continue
 
                 if dry_run:
+                    print(f"  ✓ Match found (dry run): {match.artists[0] if match.artists else 'Unknown'} - {match.title} (score: {match.score})")
                     verified += 1
                     continue
 
@@ -190,6 +309,7 @@ def verify_unverified_songs(
                     _replace_song_artists(cur, song["sha_id"], match.artists)
                 if match.tags:
                     _replace_song_genres(cur, song["sha_id"], match.tags)
+                print(f"  ✓ Verified: {match.artists[0] if match.artists else 'Unknown'} - {match.title} (score: {match.score})")
                 verified += 1
 
             conn.commit()

@@ -32,7 +32,8 @@ songbase/
 │   │   │   ├── 001_init.sql  - Metadata + embeddings schema with pgvector
 │   │   │   ├── 002_add_metadata_verification.sql - Adds verification metadata columns
 │   │   │   ├── 003_add_download_queue.sql - Adds download queue table
-│   │   │   └── 004_update_download_queue.sql - Adds queue tracking fields
+│   │   │   ├── 004_update_download_queue.sql - Adds queue tracking fields
+│   │   │   └── 005_add_album_metadata.sql - Adds album metadata + track list tables
 │   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
@@ -74,13 +75,17 @@ songbase/
 │       │   └── sources.py       - Extendable song source list reader
 │       ├── metadata_pipeline/
 │       │   ├── __init__.py       - Package entry point for verification helpers
+│       │   ├── album_pipeline.py  - Album metadata + track list ingestion
 │       │   ├── cli.py            - CLI for MusicBrainz verification
-│       │   ├── config.py         - MusicBrainz configuration defaults
+│       │   ├── config.py         - Configuration for MusicBrainz, Spotify, Wikidata APIs
+│       │   ├── filename_parser.py - Intelligent filename parsing (Artist - Title extraction)
 │       │   ├── image_cli.py       - CLI for cover art + artist profiles
 │       │   ├── image_db.py        - Image DB helpers
-│       │   ├── image_pipeline.py  - Cover art + artist profile ingestion
+│       │   ├── image_pipeline.py  - Multi-source cover art + artist profile ingestion (Cover Art Archive, Spotify, Wikidata)
 │       │   ├── musicbrainz_client.py - MusicBrainz API wrapper
-│       │   └── pipeline.py       - Unverified song verification flow
+│       │   ├── spotify_client.py  - Spotify Web API client for metadata + images
+│       │   ├── wikidata_client.py - Wikidata API client for artist images
+│       │   └── pipeline.py       - Unverified song verification flow with intelligent parsing
 │       ├── vggish/
 │       │   └── .gitkeep       - Placeholder for VGGish files
 │       ├── dependencies.py    - Ensures local package dependencies are present
@@ -191,7 +196,15 @@ try {
 - **Endpoints**:
   - `POST /api/library/ingest`: Ingest MP3 metadata and optional embeddings
   - `GET /api/library/songs`: List songs in the metadata DB
+  - `GET /api/library/songs/unlinked`: List songs missing album or artist metadata
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
+  - `POST /api/library/songs/link`: Attach songs to an existing album record
+  - `GET /api/library/albums`: List cached album metadata
+  - `GET /api/library/albums/{album_id}`: Fetch album metadata + library songs
+  - `GET /api/library/images/song/{sha_id}`: Stream song artwork
+  - `GET /api/library/images/album/{album_id}`: Stream album artwork
+  - `GET /api/library/images/artist/{artist_id}`: Stream artist artwork
+  - `GET /api/library/stream/{sha_id}`: Stream audio from the hashed cache
   - `POST /api/library/queue`: Queue songs for acquisition (accepts a list of titles)
   - `GET /api/library/queue`: View download queue status
   - `POST /api/library/queue/clear`: Clear the download queue
@@ -369,6 +382,7 @@ try {
 ### backend/processing/metadata_pipeline/
 - **Purpose**: Verify and enrich unverified songs via MusicBrainz, plus image/profile sourcing.
 - **Key Modules**:
+  - `album_pipeline.py`: Album metadata + track list ingestion
   - `cli.py`: Command-line interface for verification
   - `config.py`: MusicBrainz configuration defaults
   - `image_cli.py`: Cover art + artist profile CLI
@@ -386,7 +400,7 @@ try {
   ```
 
 ### backend/processing/metadata_pipeline/image_cli.py
-- **Purpose**: Fetch cover art and artist profiles into the image database.
+- **Purpose**: Fetch cover art, artist profiles, and album metadata into the image + metadata databases.
 - **Requires**: `SONGBASE_DATABASE_URL` and `SONGBASE_IMAGE_DATABASE_URL` set, plus musicbrainzngs.
 - **Usage**:
   ```bash
@@ -691,3 +705,78 @@ To add features:
 2. Test in Electron dev mode (`npm run electron:dev`)
 3. Build production app (`./scripts/build_desktop.sh`)
 4. Distribute new version
+
+## Multi-Source Metadata & Image Acquisition
+
+The metadata pipeline now supports fetching metadata and images from multiple sources with intelligent fallbacks:
+
+### Supported Sources
+
+1. **MusicBrainz** (Primary) - Free, open music encyclopedia
+2. **Cover Art Archive** - Free album cover repository (linked to MusicBrainz)
+3. **Wikidata** - Free knowledge base with artist images from Wikimedia Commons
+4. **Spotify** - Commercial music service (requires API credentials)
+
+### Configuration
+
+#### Spotify API Setup (Optional)
+
+To enable Spotify as an image source, you need to register an application:
+
+1. Go to [Spotify Developer Dashboard](https://developer.spotify.com/dashboard)
+2. Create a new app (any name/description)
+3. Copy your Client ID and Client Secret
+4. Set environment variables:
+
+```bash
+export SPOTIFY_CLIENT_ID="your_client_id_here"
+export SPOTIFY_CLIENT_SECRET="your_client_secret_here"
+```
+
+#### Wikidata
+
+Wikidata is enabled by default and requires no API keys. It queries the free Wikidata API and Wikimedia Commons for artist images.
+
+### How It Works
+
+The pipeline tries multiple sources in order until it finds the requested data:
+
+**For Artist Images:**
+1. MusicBrainz URL relations (if artist has image link)
+2. Wikidata (via MusicBrainz Wikidata link if available)
+3. Wikidata search (by artist name)
+4. Spotify (if configured)
+
+**For Album Cover Art:**
+1. Cover Art Archive (via MusicBrainz release ID)
+2. Spotify (if configured)
+
+### Status Messages
+
+When running the image pipeline, you'll see detailed status messages showing:
+- Which entity is being processed (song/artist/album name)
+- Which source is being queried (MusicBrainz, Wikidata, Spotify, etc.)
+- Success/failure for each source attempt
+
+Example output:
+```
+[Artists 1/25] Processing: AOA
+  → Fetching MusicBrainz profile...
+    ✓ MusicBrainz profile found
+    → Trying MusicBrainz URL relations...
+    → Trying Wikidata (ID: Q12345)...
+    ✓ Found image from Wikidata
+    → Downloading image from wikidata...
+    ✓ Image downloaded successfully
+  ✓ Profile and image stored
+```
+
+### Usage
+
+Run the image pipeline as usual:
+
+```bash
+python -m backend.processing.metadata_pipeline.image_cli --limit-artists 50
+```
+
+The pipeline will automatically try all configured sources. If Spotify credentials are not set, it will skip Spotify and continue with other sources.

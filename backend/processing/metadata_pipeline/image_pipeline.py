@@ -12,7 +12,7 @@ import musicbrainzngs
 
 from backend.db.connection import get_connection
 
-from . import config, musicbrainz_client
+from . import config, musicbrainz_client, spotify_client, wikidata_client
 from .album_pipeline import sync_release_metadata
 from .image_db import (
     album_image_exists,
@@ -356,13 +356,87 @@ def _search_artist_by_name(
     return max(artists, key=_score)
 
 
+def _fetch_artist_image_multi_source(
+    artist_name: str,
+    musicbrainz_artist: dict | None,
+    rate_limit_seconds: float | None,
+) -> tuple[str | None, str | None]:
+    """
+    Try multiple sources to fetch artist image.
+    Returns (image_url, source_name) tuple.
+    """
+    # 1. Try MusicBrainz URL relations first
+    if musicbrainz_artist:
+        print(f"    → Trying MusicBrainz URL relations...")
+        for relation in musicbrainz_artist.get("url-relation-list") or []:
+            if relation.get("type") == "image" and relation.get("target"):
+                print(f"    ✓ Found image from MusicBrainz")
+                return relation["target"], config.IMAGE_SOURCE_MUSICBRAINZ
+
+            # Check for Wikidata link
+            if relation.get("type") == "wikidata" and relation.get("target"):
+                wikidata_url = relation["target"]
+                wikidata_id = wikidata_client.get_wikidata_id_from_url(wikidata_url)
+                if wikidata_id:
+                    print(f"    → Trying Wikidata (ID: {wikidata_id})...")
+                    _sleep(rate_limit_seconds)
+                    try:
+                        image_url = wikidata_client.fetch_artist_image_by_wikidata_id(wikidata_id)
+                        if image_url:
+                            print(f"    ✓ Found image from Wikidata")
+                            return image_url, config.IMAGE_SOURCE_WIKIDATA
+                    except Exception as e:
+                        print(f"    ✗ Wikidata fetch failed: {e}")
+
+    # 2. Try Wikidata search
+    print(f"    → Trying Wikidata search...")
+    _sleep(rate_limit_seconds)
+    try:
+        image_url = wikidata_client.fetch_artist_image_by_name(artist_name)
+        if image_url:
+            print(f"    ✓ Found image from Wikidata search")
+            return image_url, config.IMAGE_SOURCE_WIKIDATA
+    except Exception as e:
+        print(f"    ✗ Wikidata search failed: {e}")
+
+    # 3. Try Spotify if configured
+    if spotify_client.is_spotify_configured():
+        print(f"    → Trying Spotify...")
+        _sleep(rate_limit_seconds)
+        try:
+            spotify = spotify_client.get_spotify_client()
+            artist_data = spotify.search_artist(artist_name)
+            if artist_data and artist_data.get("images"):
+                images = artist_data["images"]
+                # Get the highest quality image (first one)
+                if images:
+                    image_url = images[0]["url"]
+                    print(f"    ✓ Found image from Spotify")
+                    return image_url, config.IMAGE_SOURCE_SPOTIFY
+        except Exception as e:
+            print(f"    ✗ Spotify fetch failed: {e}")
+    else:
+        print(f"    → Spotify not configured (skipping)")
+
+    print(f"    ✗ No image found from any source")
+    return None, None
+
+
 def _fetch_artist_profile(
     artist_name: str,
     rate_limit_seconds: float | None,
-) -> tuple[dict[str, Any], str | None]:
+) -> tuple[dict[str, Any], str | None, str | None]:
+    """
+    Fetch artist profile and image from multiple sources.
+    Returns (profile, image_url, image_source) tuple.
+    """
+    print(f"  → Fetching MusicBrainz profile...")
     best = _search_artist_by_name(artist_name, rate_limit_seconds)
     if not best or not best.get("id"):
-        return {}, None
+        print(f"    ✗ Not found in MusicBrainz")
+        # Still try to get image from other sources
+        image_url, image_source = _fetch_artist_image_multi_source(artist_name, None, rate_limit_seconds)
+        return {}, image_url, image_source
 
     result = _mb_with_retries(
         lambda: musicbrainzngs.get_artist_by_id(
@@ -378,14 +452,64 @@ def _fetch_artist_profile(
         "fetched_at": time.time(),
         "source": config.IMAGE_SOURCE_MUSICBRAINZ,
     }
+    print(f"    ✓ MusicBrainz profile found")
 
-    image_url = None
-    for relation in artist.get("url-relation-list") or []:
-        if relation.get("type") == "image" and relation.get("target"):
-            image_url = relation["target"]
-            break
+    # Fetch image from multiple sources
+    image_url, image_source = _fetch_artist_image_multi_source(artist_name, artist, rate_limit_seconds)
 
-    return profile, image_url
+    return profile, image_url, image_source
+
+
+def _fetch_album_cover_multi_source(
+    title: str,
+    artist: str | None,
+    release_id: str | None,
+    rate_limit_seconds: float | None,
+) -> tuple[bytes | None, str | None, str | None, str | None]:
+    """
+    Try multiple sources to fetch album cover art.
+    Returns (image_bytes, mime_type, image_url, source_name) tuple.
+    """
+    # 1. Try Cover Art Archive first (via MusicBrainz release ID)
+    if release_id:
+        print(f"      → Trying Cover Art Archive...")
+        cover = _fetch_cover_art(release_id, rate_limit_seconds)
+        if cover:
+            image_bytes, mime_type, image_url = cover
+            print(f"      ✓ Found cover from Cover Art Archive")
+            return image_bytes, mime_type, image_url, config.IMAGE_SOURCE_COVER_ART
+
+    # 2. Try Spotify if configured
+    if spotify_client.is_spotify_configured() and title and artist:
+        print(f"      → Trying Spotify...")
+        _sleep(rate_limit_seconds)
+        try:
+            spotify = spotify_client.get_spotify_client()
+            # Search for the track/album
+            track_data = spotify.search_track(title, artist)
+            if track_data and track_data.get("album"):
+                album_data = track_data["album"]
+                images = album_data.get("images", [])
+                if images:
+                    # Get the highest quality image (first one)
+                    image_url = images[0]["url"]
+                    print(f"      ✓ Found cover from Spotify")
+
+                    # Download the image
+                    try:
+                        image_bytes, mime_type = _download_binary(
+                            image_url,
+                            config.IMAGE_REQUEST_TIMEOUT_SEC,
+                            config.IMAGE_MAX_BYTES,
+                        )
+                        return image_bytes, mime_type, image_url, config.IMAGE_SOURCE_SPOTIFY
+                    except Exception as e:
+                        print(f"      ✗ Failed to download Spotify image: {e}")
+        except Exception as e:
+            print(f"      ✗ Spotify search failed: {e}")
+
+    print(f"      ✗ No cover art found from any source")
+    return None, None, None, None
 
 
 def _store_cover_art(
@@ -397,29 +521,30 @@ def _store_cover_art(
     rate_limit_seconds: float | None,
     dry_run: bool,
 ) -> tuple[int, int]:
-    if not release_id:
-        return 0, 0
+    album_title = release_title or song.album
+    image_bytes, mime_type, image_url, source_name = _fetch_album_cover_multi_source(
+        album_title or song.title,
+        artist_name or song.artist,
+        release_id,
+        rate_limit_seconds,
+    )
 
-    cover = _fetch_cover_art(release_id, rate_limit_seconds)
-    if not cover:
+    if not image_bytes:
         return 0, 0
-
-    image_bytes, mime_type, image_url = cover
 
     if dry_run:
-        return 1, 1 if release_title or song.album else 0
+        return 1, 1 if album_title else 0
 
     image_id, _sha = get_or_create_image(
         cur,
         image_bytes,
         mime_type,
-        source_name=config.IMAGE_SOURCE_COVER_ART,
+        source_name=source_name or config.IMAGE_SOURCE_COVER_ART,
         source_url=image_url,
     )
 
     upsert_song_image(cur, song.sha_id, image_id, config.IMAGE_TYPE_COVER)
 
-    album_title = release_title or song.album
     if album_title:
         album_key = _album_key(album_title, artist_name or song.artist)
         if album_key:
@@ -442,12 +567,18 @@ def _store_artist_profile(
     rate_limit_seconds: float | None,
     dry_run: bool,
 ) -> tuple[int, int]:
-    profile, image_url = _fetch_artist_profile(artist.name, rate_limit_seconds)
-    if not profile:
+    profile, image_url, image_source = _fetch_artist_profile(artist.name, rate_limit_seconds)
+
+    # If we don't have a profile or image, return early
+    if not profile and not image_url:
         return 0, 0
+
+    # Use the actual image source or fall back to MusicBrainz
+    actual_source = image_source or config.IMAGE_SOURCE_MUSICBRAINZ
 
     image_id = None
     if image_url:
+        print(f"    → Downloading image from {actual_source}...")
         try:
             image_bytes, mime_type = _download_binary(
                 image_url,
@@ -455,29 +586,35 @@ def _store_artist_profile(
                 config.IMAGE_MAX_BYTES,
             )
             _sleep(rate_limit_seconds)
-        except (urllib.error.URLError, ValueError, ssl.SSLError, TimeoutError, ConnectionResetError):
+            print(f"    ✓ Image downloaded successfully")
+        except (urllib.error.URLError, ValueError, ssl.SSLError, TimeoutError, ConnectionResetError) as e:
+            print(f"    ✗ Image download failed: {e}")
             image_bytes = None
             mime_type = None
+
         if image_bytes and mime_type and not dry_run:
             image_id, _sha = get_or_create_image(
                 cur,
                 image_bytes,
                 mime_type,
-                source_name=config.IMAGE_SOURCE_MUSICBRAINZ,
+                source_name=actual_source,
                 source_url=image_url,
             )
 
     if dry_run:
-        return 1, 1 if image_id else 0
+        return 1, 1 if image_url else 0
 
-    upsert_artist_profile(
-        cur,
-        artist.name,
-        profile,
-        image_id,
-        source_name=config.IMAGE_SOURCE_MUSICBRAINZ,
-        source_url=image_url,
-    )
+    # Only store profile if we have one
+    if profile:
+        upsert_artist_profile(
+            cur,
+            artist.name,
+            profile,
+            image_id,
+            source_name=actual_source,
+            source_url=image_url,
+        )
+
     return 1, 1 if image_id else 0
 
 
@@ -502,12 +639,20 @@ def sync_images_and_profiles(
     skipped = 0
     failed = 0
 
+    total_songs = len(songs)
+    total_artists = len(artists)
+
+    print(f"\nStarting image sync for {total_songs} song(s) and {total_artists} artist(s)...\n")
+
     synced_releases: set[str] = set()
 
     with with_image_connection() as image_conn:
         with image_conn.cursor() as image_cur:
             for song in songs:
                 songs_processed += 1
+
+                artist_display = song.artist or "Unknown Artist"
+                print(f"[Songs {songs_processed}/{total_songs}] Processing: {artist_display} - {song.title}")
 
                 has_song_image = song_image_exists(
                     image_cur,
@@ -525,12 +670,14 @@ def sync_images_and_profiles(
                     else False
                 )
                 if has_song_image and has_album_image:
+                    print(f"  → Already has cover art, skipping")
                     skipped += 1
                     continue
 
                 try:
                     recording = _resolve_recording(song, rate_limit_seconds)
                     if not recording:
+                        print(f"  ✗ No recording found")
                         skipped += 1
                         continue
 
@@ -542,6 +689,7 @@ def sync_images_and_profiles(
 
                     if release_id and release_id not in synced_releases:
                         synced_releases.add(release_id)
+                        print(f"  → Syncing album metadata: {release_title or song.album or 'Unknown Album'}")
                         try:
                             album_delta, track_delta = sync_release_metadata(
                                 release_id,
@@ -550,7 +698,8 @@ def sync_images_and_profiles(
                             )
                             album_metadata += album_delta
                             album_tracks += track_delta
-                        except Exception:  # noqa: BLE001
+                        except Exception as e:  # noqa: BLE001
+                            print(f"    ✗ Album metadata failed: {str(e)}")
                             failed += 1
 
                     song_delta, album_delta = _store_cover_art(
@@ -564,14 +713,27 @@ def sync_images_and_profiles(
                     )
                     song_images += song_delta
                     album_images += album_delta
+                    if song_delta > 0 or album_delta > 0:
+                        print(f"  ✓ Cover art stored (song: {song_delta}, album: {album_delta})")
+                    else:
+                        print(f"  → No cover art available")
                     if not dry_run:
                         image_conn.commit()
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ✗ Failed: {str(e)}")
                     failed += 1
                     image_conn.rollback()
 
+            artist_count = 0
+            if total_artists > 0:
+                print(f"\nProcessing artist profiles...\n")
+
             for artist in artists:
+                artist_count += 1
+                print(f"[Artists {artist_count}/{total_artists}] Processing: {artist.name}")
+
                 if artist_profile_exists(image_cur, artist.name):
+                    print(f"  → Already has profile, skipping")
                     skipped += 1
                     continue
 
@@ -584,9 +746,17 @@ def sync_images_and_profiles(
                     )
                     artist_profiles += profile_delta
                     artist_images += image_delta
+                    if profile_delta > 0:
+                        if image_delta > 0:
+                            print(f"  ✓ Profile and image stored")
+                        else:
+                            print(f"  ✓ Profile stored (no image available)")
+                    else:
+                        print(f"  ✗ No profile found")
                     if not dry_run:
                         image_conn.commit()
-                except Exception:  # noqa: BLE001
+                except Exception as e:  # noqa: BLE001
+                    print(f"  ✗ Failed: {str(e)}")
                     failed += 1
                     image_conn.rollback()
 

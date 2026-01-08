@@ -260,18 +260,31 @@ def sync_release_metadata(
     dry_run: bool = False,
 ) -> tuple[int, int]:
     musicbrainz_client.configure_client(rate_limit_seconds=rate_limit_seconds)
+
+    print(f"Fetching release metadata for MusicBrainz ID: {release_id}")
+
     release = musicbrainz_client.fetch_release(
         release_id,
         rate_limit_seconds=rate_limit_seconds,
     )
     album = _build_album_metadata(release, config.VERIFICATION_SOURCE)
     if not album:
+        print(f"  ✗ Failed to build album metadata")
         return 0, 0
+
+    artist_display = album.artist_name or "Unknown Artist"
+    print(f"  → Album: {artist_display} - {album.title}")
+    print(f"  → Tracks: {len(album.tracks)}")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
             album_count, track_count = _store_album_metadata(cur, album, dry_run)
         if not dry_run:
             conn.commit()
+
+    if dry_run:
+        print(f"  ✓ Would store {album_count} album(s) with {track_count} track(s) (dry run)")
+    else:
+        print(f"  ✓ Stored {album_count} album(s) with {track_count} track(s)")
 
     return album_count, track_count

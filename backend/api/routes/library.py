@@ -844,13 +844,34 @@ async def get_artist(
 
     with get_connection() as conn:
         with conn.cursor() as cur:
+            # Try to get artist name from artists table first
             cur.execute(
                 "SELECT name FROM metadata.artists WHERE artist_id = %s",
                 (artist_id,),
             )
             row = cur.fetchone()
+
             if not row:
-                raise HTTPException(status_code=404, detail="Artist not found.")
+                # Artist doesn't exist in artists table
+                # This can happen if artist_id is referenced in songs but the artist record is missing
+                # Return a helpful error message
+                cur.execute(
+                    """
+                    SELECT COUNT(*) FROM metadata.song_artists WHERE artist_id = %s
+                    """,
+                    (artist_id,),
+                )
+                song_ref_count = cur.fetchone()[0]
+                if song_ref_count > 0:
+                    error_msg = (
+                        f"Artist data is incomplete. "
+                        f"Artist ID {artist_id} is referenced by {song_ref_count} song(s) "
+                        f"but has no artist record. Please run metadata verification to fix this."
+                    )
+                    raise HTTPException(status_code=500, detail=error_msg)
+                else:
+                    raise HTTPException(status_code=404, detail=f"Artist with ID {artist_id} not found.")
+
             artist_name = row[0]
 
             cur.execute(
@@ -867,13 +888,14 @@ async def get_artist(
                 """
                 WITH song_counts AS (
                     SELECT
+                        s.album,
                         md5(lower(coalesce(s.album, '')) || '::' || lower(%s)) AS album_id,
                         COUNT(*) AS song_count
                     FROM metadata.songs s
                     JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
                     WHERE sa.artist_id = %s
                       AND s.album IS NOT NULL AND s.album <> ''
-                    GROUP BY md5(lower(coalesce(s.album, '')) || '::' || lower(%s))
+                    GROUP BY s.album
                 )
                 SELECT
                     a.album_id,
@@ -886,7 +908,7 @@ async def get_artist(
                 WHERE a.artist_id = %s OR lower(a.artist_name) = lower(%s)
                 ORDER BY a.release_year DESC NULLS LAST, a.title ASC
                 """,
-                (artist_name, artist_id, artist_name, artist_id, artist_name),
+                (artist_name, artist_id, artist_id, artist_name),
             )
             album_rows = cur.fetchall()
             if not album_rows:
@@ -1096,6 +1118,62 @@ async def get_album(
     }
 
 
+@router.get("/songs/unlinked")
+async def list_unlinked_songs(limit: int = 50, offset: int = 0) -> dict[str, Any]:
+    if limit < 1:
+        raise HTTPException(status_code=400, detail="limit must be >= 1")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="offset must be >= 0")
+
+    query = """
+        SELECT
+            s.sha_id,
+            s.title,
+            s.album,
+            COALESCE(
+                MAX(a.name) FILTER (WHERE sa.role = 'primary'),
+                MAX(a.name)
+            ) AS artist_name
+        FROM metadata.songs s
+        LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+        LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+        WHERE (s.album IS NULL OR s.album = '')
+           OR a.name IS NULL
+        GROUP BY s.sha_id
+        ORDER BY s.updated_at DESC
+        LIMIT %s OFFSET %s
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (limit, offset))
+            rows = cur.fetchall()
+
+            cur.execute(
+                """
+                SELECT COUNT(*)
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                WHERE (s.album IS NULL OR s.album = '')
+                   OR a.name IS NULL
+                """
+            )
+            total = cur.fetchone()[0]
+
+    items = [
+        {
+            "sha_id": row[0],
+            "title": row[1],
+            "album": row[2],
+            "artist": row[3],
+        }
+        for row in rows
+    ]
+
+    return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
 @router.get("/songs/{sha_id}")
 async def get_song(sha_id: str) -> dict[str, Any]:
     with get_connection() as conn:
@@ -1170,62 +1248,6 @@ async def get_song(sha_id: str) -> dict[str, Any]:
     }
 
 
-@router.get("/songs/unlinked")
-async def list_unlinked_songs(limit: int = 50, offset: int = 0) -> dict[str, Any]:
-    if limit < 1:
-        raise HTTPException(status_code=400, detail="limit must be >= 1")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0")
-
-    query = """
-        SELECT
-            s.sha_id,
-            s.title,
-            s.album,
-            COALESCE(
-                MAX(a.name) FILTER (WHERE sa.role = 'primary'),
-                MAX(a.name)
-            ) AS artist_name
-        FROM metadata.songs s
-        LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
-        LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
-        WHERE (s.album IS NULL OR s.album = '')
-           OR a.name IS NULL
-        GROUP BY s.sha_id
-        ORDER BY s.updated_at DESC
-        LIMIT %s OFFSET %s
-    """
-
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(query, (limit, offset))
-            rows = cur.fetchall()
-
-            cur.execute(
-                """
-                SELECT COUNT(*)
-                FROM metadata.songs s
-                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
-                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
-                WHERE (s.album IS NULL OR s.album = '')
-                   OR a.name IS NULL
-                """
-            )
-            total = cur.fetchone()[0]
-
-    items = [
-        {
-            "sha_id": row[0],
-            "title": row[1],
-            "album": row[2],
-            "artist": row[3],
-        }
-        for row in rows
-    ]
-
-    return {"items": items, "total": total, "limit": limit, "offset": offset}
-
-
 @router.post("/songs/link")
 async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
     if not payload.sha_ids:
@@ -1280,6 +1302,7 @@ async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
                         sha_id,
                     ),
                 )
+                update_count = cur.rowcount
                 if artist_name and artist_id:
                     cur.execute(
                         "DELETE FROM metadata.song_artists WHERE sha_id = %s",
@@ -1293,7 +1316,7 @@ async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
                         """,
                         (sha_id, artist_id, "primary"),
                     )
-                updated += cur.rowcount
+                updated += update_count
 
         conn.commit()
 
@@ -1388,7 +1411,8 @@ async def artist_image(artist_id: int) -> Response:
             )
             row = cur.fetchone()
             if not row:
-                raise HTTPException(status_code=404, detail="Artist not found.")
+                # Return a 404 silently for images - the frontend will handle by showing a placeholder
+                raise HTTPException(status_code=404, detail="Artist not found")
             artist_name = row[0]
 
     payload = _fetch_image_bytes(
@@ -1403,7 +1427,7 @@ async def artist_image(artist_id: int) -> Response:
         (artist_name,),
     )
     if not payload:
-        raise HTTPException(status_code=404, detail="Image not found.")
+        raise HTTPException(status_code=404, detail="Image not found")
     image_bytes, mime_type = payload
     return Response(content=image_bytes, media_type=mime_type)
 

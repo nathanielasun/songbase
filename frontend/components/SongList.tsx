@@ -67,15 +67,26 @@ export default function SongList({
 
               {/* Title with Album Art */}
               <div className="flex items-center gap-3 min-w-0">
-                {song.albumArt && (
-                  <Image
+                {song.albumArt ? (
+                  <img
                     src={song.albumArt}
-                    alt={song.title}
+                    alt=""
                     width={40}
                     height={40}
-                    className="rounded"
+                    className="rounded object-cover bg-gray-800"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const placeholder = e.currentTarget.nextElementSibling;
+                      if (placeholder) {
+                        (placeholder as HTMLElement).style.display = 'block';
+                      }
+                    }}
                   />
-                )}
+                ) : null}
+                <div
+                  className="w-10 h-10 rounded bg-gray-800 flex-shrink-0"
+                  style={{ display: song.albumArt ? 'none' : 'block' }}
+                />
                 <div className="flex-1 min-w-0">
                   <p
                     className={`truncate ${

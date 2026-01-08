@@ -59,5 +59,20 @@ IMAGE_RETRY_MAX_BACKOFF_SEC = float(
 
 IMAGE_SOURCE_COVER_ART = "cover-art-archive"
 IMAGE_SOURCE_MUSICBRAINZ = "musicbrainz"
+IMAGE_SOURCE_WIKIDATA = "wikidata"
+IMAGE_SOURCE_SPOTIFY = "spotify"
 
 IMAGE_TYPE_COVER = "cover"
+
+# Spotify API Configuration
+SPOTIFY_CLIENT_ID = os.environ.get("SPOTIFY_CLIENT_ID", "")
+SPOTIFY_CLIENT_SECRET = os.environ.get("SPOTIFY_CLIENT_SECRET", "")
+SPOTIFY_RATE_LIMIT_SECONDS = float(os.environ.get("SPOTIFY_RATE_LIMIT_SECONDS", "0.1"))
+SPOTIFY_REQUEST_RETRIES = int(os.environ.get("SPOTIFY_REQUEST_RETRIES", "3"))
+
+# Wikidata API Configuration
+WIKIDATA_API_URL = "https://www.wikidata.org/w/api.php"
+WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
+WIKIDATA_RATE_LIMIT_SECONDS = float(os.environ.get("WIKIDATA_RATE_LIMIT_SECONDS", "0.5"))
+WIKIDATA_REQUEST_TIMEOUT_SEC = 15
+WIKIDATA_REQUEST_RETRIES = int(os.environ.get("WIKIDATA_REQUEST_RETRIES", "3"))

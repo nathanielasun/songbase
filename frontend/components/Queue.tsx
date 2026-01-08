@@ -1,7 +1,6 @@
 'use client';
 
 import { useState } from 'react';
-import Image from 'next/image';
 import { XMarkIcon, ChevronRightIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { formatDuration } from '@/lib/mockData';
@@ -59,15 +58,26 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
             <div className="p-4 border-b border-gray-800">
               <p className="text-sm text-gray-400 mb-3">Now Playing</p>
               <div className="flex items-center gap-3 bg-gray-800/50 rounded-lg p-3">
-                {currentSong.albumArt && (
-                  <Image
+                {currentSong.albumArt ? (
+                  <img
                     src={currentSong.albumArt}
-                    alt={currentSong.title}
+                    alt=""
                     width={48}
                     height={48}
-                    className="rounded"
+                    className="rounded object-cover bg-gray-700"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                      const placeholder = e.currentTarget.nextElementSibling;
+                      if (placeholder) {
+                        (placeholder as HTMLElement).style.display = 'block';
+                      }
+                    }}
                   />
-                )}
+                ) : null}
+                <div
+                  className="w-12 h-12 rounded bg-gray-700 flex-shrink-0"
+                  style={{ display: currentSong.albumArt ? 'none' : 'block' }}
+                />
                 <div className="flex-1 min-w-0">
                   <p className="text-white font-medium truncate text-sm">
                     {currentSong.title}
@@ -106,15 +116,26 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                       onClick={() => playFromQueue(index)}
                       className="flex-1 flex items-center gap-3 min-w-0"
                     >
-                      {song.albumArt && (
-                        <Image
+                      {song.albumArt ? (
+                        <img
                           src={song.albumArt}
-                          alt={song.title}
+                          alt=""
                           width={40}
                           height={40}
-                          className="rounded"
+                          className="rounded object-cover bg-gray-700"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                            const placeholder = e.currentTarget.nextElementSibling;
+                            if (placeholder) {
+                              (placeholder as HTMLElement).style.display = 'block';
+                            }
+                          }}
                         />
-                      )}
+                      ) : null}
+                      <div
+                        className="w-10 h-10 rounded bg-gray-700 flex-shrink-0"
+                        style={{ display: song.albumArt ? 'none' : 'block' }}
+                      />
                       <div className="flex-1 min-w-0">
                         <p className="text-white text-sm truncate">
                           {song.title}
@@ -151,15 +172,26 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                     key={`playlist-${song.id}-${index}`}
                     className="flex items-center gap-3 p-2 rounded-lg opacity-60"
                   >
-                    {song.albumArt && (
-                      <Image
+                    {song.albumArt ? (
+                      <img
                         src={song.albumArt}
-                        alt={song.title}
+                        alt=""
                         width={40}
                         height={40}
-                        className="rounded"
+                        className="rounded object-cover bg-gray-700"
+                        onError={(e) => {
+                          e.currentTarget.style.display = 'none';
+                          const placeholder = e.currentTarget.nextElementSibling;
+                          if (placeholder) {
+                            (placeholder as HTMLElement).style.display = 'block';
+                          }
+                        }}
                       />
-                    )}
+                    ) : null}
+                    <div
+                      className="w-10 h-10 rounded bg-gray-700 flex-shrink-0"
+                      style={{ display: song.albumArt ? 'none' : 'block' }}
+                    />
                     <div className="flex-1 min-w-0">
                       <p className="text-white text-sm truncate">
                         {song.title}

@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import Image from 'next/image';
 import {
   PlayIcon,
   PauseIcon,
@@ -60,6 +59,7 @@ export default function MusicPlayer({
   const audioRef = useRef<HTMLAudioElement>(null);
   const onSongEndRef = useRef(onSongEnd);
   const isPlayingRef = useRef(isPlaying);
+  const repeatModeRef = useRef(repeatMode);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -71,6 +71,10 @@ export default function MusicPlayer({
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
+
+  useEffect(() => {
+    repeatModeRef.current = repeatMode;
+  }, [repeatMode]);
 
   // Load audio source when song changes
   useEffect(() => {
@@ -158,9 +162,15 @@ export default function MusicPlayer({
 
     const handleEnded = () => {
       console.log('Audio ended');
-      if (repeatMode === 'once') {
+      if (repeatModeRef.current === 'once') {
+        console.log('Repeating song (once mode)');
         audio.currentTime = 0;
-        audio.play();
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((error) => {
+            console.error('Repeat playback failed:', error);
+          });
+        }
       } else if (onSongEndRef.current) {
         onSongEndRef.current();
       }
@@ -223,7 +233,7 @@ export default function MusicPlayer({
       audio.removeEventListener('seeked', handleSeeked);
       audio.removeEventListener('error', handleError);
     };
-  }, [repeatMode]);
+  }, []);
 
   const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!currentSong || !audioRef.current) return;
@@ -251,6 +261,21 @@ export default function MusicPlayer({
 
   const toggleMute = () => {
     setIsMuted(!isMuted);
+  };
+
+  const handlePrevious = () => {
+    if (!audioRef.current) {
+      onPrevious();
+      return;
+    }
+
+    // If more than 3 seconds into the song, restart it instead of going to previous
+    if (currentTime > 3) {
+      audioRef.current.currentTime = 0;
+      setCurrentTime(0);
+    } else {
+      onPrevious();
+    }
   };
 
   const handleLike = () => {
@@ -284,15 +309,26 @@ export default function MusicPlayer({
       <div className="h-24 bg-gray-900 border-t border-gray-800 px-4 flex items-center justify-between">
       {/* Song Info with Like/Dislike */}
       <div className="flex items-center gap-4 w-1/4">
-        {currentSong.albumArt && (
-          <Image
+        {currentSong.albumArt ? (
+          <img
             src={currentSong.albumArt}
-            alt={currentSong.title}
+            alt=""
             width={56}
             height={56}
-            className="rounded"
+            className="rounded object-cover bg-gray-800"
+            onError={(e) => {
+              e.currentTarget.style.display = 'none';
+              const placeholder = e.currentTarget.nextElementSibling;
+              if (placeholder) {
+                (placeholder as HTMLElement).style.display = 'block';
+              }
+            }}
           />
-        )}
+        ) : null}
+        <div
+          className="w-14 h-14 rounded bg-gray-800 flex-shrink-0"
+          style={{ display: currentSong.albumArt ? 'none' : 'block' }}
+        />
         <div className="flex-1 min-w-0">
           <p className="text-white text-sm font-semibold truncate">{currentSong.title}</p>
           <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
@@ -347,7 +383,7 @@ export default function MusicPlayer({
 
           {/* Previous Button */}
           <button
-            onClick={onPrevious}
+            onClick={handlePrevious}
             className="text-gray-400 hover:text-white transition-colors"
           >
             <BackwardIcon className="w-5 h-5" />
