@@ -128,6 +128,7 @@ songbase/
 - **Notes**: Sources already queued are hidden from the sources list and shown only in the pipeline queue table.
 - **Notes**: The pipeline queue table is paged (10/25/50/100).
 - **Notes**: The pipeline run panel shows live config, last event, and cache paths while running.
+- **Notes**: "Run until queue is empty" checkbox automatically processes batches until all pending and processing items are stored or failed.
 
 ### frontend/app/settings/page.tsx
 - **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
@@ -320,6 +321,7 @@ try {
   ```
 - **Notes**: Appends progress events to `preprocessed_cache/pipeline_state.jsonl`.
 - **Optional**: Add `--images` to sync cover art and artist profiles (requires `SONGBASE_IMAGE_DATABASE_URL`).
+- **Optional**: Add `--run-until-empty` to automatically continue processing batches until the queue is completely empty (downloads and processes in batches based on limits).
 - **Preflight**: Verifies `tensorflow`, `tf_slim`, and `resampy` are installed before running embeddings.
 - **UI Behavior**: The web UI does not auto-seed `sources.jsonl` when starting the pipeline; use the Seed action explicitly.
 
@@ -380,16 +382,20 @@ try {
   ```
 
 ### backend/processing/metadata_pipeline/
-- **Purpose**: Verify and enrich unverified songs via MusicBrainz, plus image/profile sourcing.
+- **Purpose**: Verify and enrich unverified songs via multi-source metadata and automatic image fetching
 - **Key Modules**:
   - `album_pipeline.py`: Album metadata + track list ingestion
   - `cli.py`: Command-line interface for verification
-  - `config.py`: MusicBrainz configuration defaults
-  - `image_cli.py`: Cover art + artist profile CLI
+  - `config.py`: Configuration for MusicBrainz, Spotify, Wikidata APIs
+  - `filename_parser.py`: Intelligent filename parsing to extract artist and title
+  - `image_cli.py`: Standalone cover art + artist profile CLI
   - `image_db.py`: Image DB helpers
-  - `image_pipeline.py`: Cover art + artist profile ingestion
+  - `image_pipeline.py`: Multi-source cover art + artist profile ingestion
+  - `multi_source_resolver.py`: Multi-source metadata resolution with intelligent parsing
   - `musicbrainz_client.py`: MusicBrainz API wrapper
-  - `pipeline.py`: Unverified song verification flow
+  - `spotify_client.py`: Spotify Web API client for metadata and images
+  - `wikidata_client.py`: Wikidata API client for artist images
+  - `pipeline.py`: Integrated verification flow with automatic image fetching
 
 ### backend/processing/metadata_pipeline/cli.py
 - **Purpose**: Verify and enrich unverified songs with MusicBrainz
@@ -438,6 +444,7 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
   - `cli.py`: Command-line interface for acquisition
   - `config.py`: Cache locations + yt-dlp settings
   - `db.py`: Download queue helpers (reads `metadata.download_queue`)
+    - **Automatic cleanup**: Songs are automatically removed from the queue when they reach "stored" or "duplicate" status to prevent duplication
   - `discovery.py`: Song list discovery + sources.jsonl writer (no downloads)
   - `discovery_providers.py`: External discovery routines (MusicBrainz, hotlists)
   - `downloader.py`: yt-dlp download worker
@@ -780,3 +787,137 @@ python -m backend.processing.metadata_pipeline.image_cli --limit-artists 50
 ```
 
 The pipeline will automatically try all configured sources. If Spotify credentials are not set, it will skip Spotify and continue with other sources.
+
+## Integrated Metadata Verification with Image Fetching
+
+Starting from the latest update, the metadata verification pipeline (`backend/processing/metadata_pipeline/pipeline.py`) now automatically fetches missing images immediately after verifying each song. This provides a seamless, single-operation workflow for complete metadata enrichment.
+
+### How It Works
+
+1. **Intelligent Filename Parsing with Progressive Title Simplification**: When a song lacks artist/title metadata, the pipeline uses exceptionally robust parsing strategies:
+   - **Pattern extraction strategies**:
+     - **Dash pattern**: "ARTIST - TITLE" (most common)
+     - **Underscore pattern**: "ARTIST_TITLE"
+     - **Parentheses**: "(ARTIST) TITLE" or "TITLE (ARTIST)"
+     - **Track numbers**: "01 ARTIST - TITLE"
+     - **CamelCase**: "ArtistNameSongTitle"
+   - **Confidence scoring**: Each parse strategy returns a confidence score (0.0-1.0)
+   - **Progressive title variant generation**: Automatically strips common qualifiers to improve matching accuracy
+     - Removes: "Official Video", "Visualizer", "Official Audio", "Lyric Video", "Lyrics"
+     - Removes: "HD", "HQ", "4K", "UHD", "1080p", "720p", "480p"
+     - Removes: "Live", "Acoustic", "Unplugged", "Live at/from/in"
+     - Removes: "Remastered", "Remix", "Extended", "Radio Edit", "Album/Single Version"
+     - Removes: "Explicit/Clean Version", "M V", "MV"
+     - Removes: Parenthetical/bracketed qualifiers: "(Official Video)", "[Visualizer]", etc.
+   - **Automatic fallback chain**: For "Marquez - Firemen Official Visualizer":
+     1. First tries: "Firemen Official Visualizer"
+     2. Then tries: "Firemen Visualizer"
+     3. Then tries: "Firemen"
+     4. Returns first successful match
+   - **Smart de-duplication**: Avoids trying identical variants multiple times
+
+2. **Multi-Source Metadata Resolution**: For each song, the pipeline tries sources in this order:
+   - **MusicBrainz** (highest priority for accuracy and completeness)
+   - **Spotify** (if configured, excellent for modern commercial tracks)
+   - **Wikidata** (for additional artist information)
+
+3. **Automatic Image Fetching**: After successfully verifying a song, the pipeline immediately:
+   - **Fetches album cover art** from:
+     - Cover Art Archive (via MusicBrainz release ID)
+     - Spotify (if configured)
+   - **Fetches artist profile images** from:
+     - MusicBrainz URL relations
+     - Wikidata (via MusicBrainz link or artist name search)
+     - Spotify (if configured)
+
+4. **Real-Time Status Updates**: All verification and image fetching operations stream status updates to the frontend via Server-Sent Events (SSE):
+   - Which source is being queried for metadata
+   - Success/failure of each metadata source attempt
+   - Image fetching progress (album covers and artist images)
+   - Final statistics including images fetched
+
+### Technical Implementation
+
+**Backend Components:**
+
+1. **`backend/processing/metadata_pipeline/filename_parser.py`**:
+   - Parses filenames with multiple strategies
+   - Returns confidence-scored interpretations
+   - Handles common artist-title patterns
+
+2. **`backend/processing/metadata_pipeline/multi_source_resolver.py`**:
+   - Orchestrates multi-source metadata resolution
+   - Implements fallback chain across all sources
+   - Validates parsed metadata against match results
+
+3. **`backend/processing/metadata_pipeline/pipeline.py`**:
+   - Main verification entry point
+   - Integrates image fetching after successful verification
+   - Returns comprehensive results including image statistics
+
+4. **`backend/api/routes/processing.py`**:
+   - SSE endpoint for real-time status streaming
+   - Formats status messages as JSON
+   - Includes image statistics in completion message
+
+**Frontend Components:**
+
+1. **`frontend/app/library/page.tsx`**:
+   - Connects to SSE endpoint for live updates
+   - Displays streaming status messages
+   - Shows completion summary with image counts
+
+### Usage Examples
+
+**Via Web UI:**
+1. Navigate to `/library` → Metadata tab
+2. Click "Verify Songs"
+3. Watch real-time status updates showing:
+   - Filename parsing attempts
+   - Multi-source metadata queries
+   - Image fetching progress
+4. See final summary: "X verified, Y album covers, Z artist images"
+
+**Via CLI:**
+```bash
+# Metadata verification now includes automatic image fetching
+SONGBASE_DATABASE_URL=postgres://... \
+SONGBASE_IMAGE_DATABASE_URL=postgres://... \
+python backend/processing/metadata_pipeline/cli.py --limit 100
+```
+
+**Via API:**
+```bash
+# Connect to SSE stream for real-time updates
+curl -N http://localhost:8000/api/processing/metadata/verify-stream?limit=10
+
+# SSE messages format (simple match):
+data: {"type": "status", "message": "[1/10] Verifying: ALLEYCVT - BACK2LIFE"}
+data: {"type": "status", "message": "  → Trying MusicBrainz..."}
+data: {"type": "status", "message": "  ✓ Found match from MusicBrainz"}
+data: {"type": "status", "message": "    → Fetching album cover art..."}
+data: {"type": "status", "message": "    ✓ Album cover fetched from cover-art-archive"}
+
+# SSE messages format (with progressive title simplification):
+data: {"type": "status", "message": "[2/10] Verifying: Marquez - Firemen Official Visualizer"}
+data: {"type": "status", "message": "  → Trying MusicBrainz..."}
+data: {"type": "status", "message": "  ✗ No match from MusicBrainz"}
+data: {"type": "status", "message": "  → Trying Spotify..."}
+data: {"type": "status", "message": "  ✗ No match from Spotify"}
+data: {"type": "status", "message": "  → Trying simplified title: 'Firemen Visualizer'..."}
+data: {"type": "status", "message": "  ✗ No match"}
+data: {"type": "status", "message": "  → Trying simplified title: 'Firemen'..."}
+data: {"type": "status", "message": "  ✓ Match found with simplified title!"}
+data: {"type": "status", "message": "  ✓ Verified: Marquez - Firemen (source: musicbrainz, score: 95)"}
+
+data: {"type": "complete", "verified": 10, "processed": 10, "skipped": 0, "album_images": 8, "artist_images": 5}
+```
+
+### Benefits
+
+1. **Single Operation**: No need to run separate verification and image sync commands
+2. **Immediate Results**: Verified songs have artwork immediately available
+3. **Better Coverage**: Multi-source approach maximizes metadata and image availability
+4. **Intelligent Parsing**: Extracts metadata from filenames when embedded tags are missing
+5. **Real-Time Feedback**: Live status updates show exactly what the pipeline is doing
+6. **Efficient**: Images are fetched only for newly verified songs (checks for existing images first)

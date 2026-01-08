@@ -178,55 +178,66 @@ def mark_status(
 ) -> None:
     with get_connection() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                UPDATE metadata.download_queue
-                SET
-                    status = %s,
-                    download_path = COALESCE(%s, download_path),
-                    sha_id = COALESCE(%s, sha_id),
-                    stored_path = COALESCE(%s, stored_path),
-                    downloaded_at = CASE
-                        WHEN %s = %s THEN NOW()
-                        ELSE downloaded_at
-                    END,
-                    processed_at = CASE
-                        WHEN %s = 'pcm_raw_ready' THEN NOW()
-                        ELSE processed_at
-                    END,
-                    hashed_at = CASE
-                        WHEN %s = 'hashed' THEN NOW()
-                        ELSE hashed_at
-                    END,
-                    embedded_at = CASE
-                        WHEN %s = 'embedded' THEN NOW()
-                        ELSE embedded_at
-                    END,
-                    stored_at = CASE
-                        WHEN %s = 'stored' THEN NOW()
-                        ELSE stored_at
-                    END,
-                    last_error = %s,
-                    attempts = attempts + CASE WHEN %s THEN 1 ELSE 0 END,
-                    updated_at = NOW()
-                WHERE queue_id = %s
-                """,
-                (
-                    status,
-                    download_path,
-                    sha_id,
-                    stored_path,
-                    status,
-                    config.DOWNLOAD_STATUS_DOWNLOADED,
-                    status,
-                    status,
-                    status,
-                    status,
-                    error,
-                    increment_attempts,
-                    queue_id,
-                ),
-            )
+            # If status is 'stored' or 'duplicate', delete the queue item to avoid duplication
+            # Both indicate the song has been successfully processed and stored
+            if status in ('stored', 'duplicate'):
+                cur.execute(
+                    """
+                    DELETE FROM metadata.download_queue
+                    WHERE queue_id = %s
+                    """,
+                    (queue_id,),
+                )
+            else:
+                cur.execute(
+                    """
+                    UPDATE metadata.download_queue
+                    SET
+                        status = %s,
+                        download_path = COALESCE(%s, download_path),
+                        sha_id = COALESCE(%s, sha_id),
+                        stored_path = COALESCE(%s, stored_path),
+                        downloaded_at = CASE
+                            WHEN %s = %s THEN NOW()
+                            ELSE downloaded_at
+                        END,
+                        processed_at = CASE
+                            WHEN %s = 'pcm_raw_ready' THEN NOW()
+                            ELSE processed_at
+                        END,
+                        hashed_at = CASE
+                            WHEN %s = 'hashed' THEN NOW()
+                            ELSE hashed_at
+                        END,
+                        embedded_at = CASE
+                            WHEN %s = 'embedded' THEN NOW()
+                            ELSE embedded_at
+                        END,
+                        stored_at = CASE
+                            WHEN %s = 'stored' THEN NOW()
+                            ELSE stored_at
+                        END,
+                        last_error = %s,
+                        attempts = attempts + CASE WHEN %s THEN 1 ELSE 0 END,
+                        updated_at = NOW()
+                    WHERE queue_id = %s
+                    """,
+                    (
+                        status,
+                        download_path,
+                        sha_id,
+                        stored_path,
+                        status,
+                        config.DOWNLOAD_STATUS_DOWNLOADED,
+                        status,
+                        status,
+                        status,
+                        status,
+                        error,
+                        increment_attempts,
+                        queue_id,
+                    ),
+                )
         conn.commit()
 
 

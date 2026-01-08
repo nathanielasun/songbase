@@ -72,6 +72,7 @@ class PipelineRunRequest(BaseModel):
     image_limit_artists: int | None = None
     image_rate_limit: float | None = None
     sources_file: str | None = None
+    run_until_empty: bool = False
 
 
 class SeedSourcesRequest(BaseModel):
@@ -1733,6 +1734,7 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
             sources_file=Path(payload.sources_file).expanduser().resolve()
             if payload.sources_file
             else None,
+            run_until_empty=payload.run_until_empty,
         )
         pipeline_paths = _resolve_pipeline_paths()
         try:

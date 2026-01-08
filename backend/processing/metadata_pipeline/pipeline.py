@@ -1,13 +1,30 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Callable, Iterable
 
 from backend.db.connection import get_connection
 
 from . import config
-from .filename_parser import parse_filename, should_parse_filename
-from .musicbrainz_client import RecordingMatch, configure_client, resolve_match
+from .multi_source_resolver import MetadataMatch, resolve_with_parsing
+from .musicbrainz_client import configure_client
+from .image_pipeline import (
+    _album_key,
+    _download_binary,
+    _fetch_album_cover_multi_source,
+    _fetch_artist_image_multi_source,
+    _search_artist_by_name,
+)
+from .image_db import (
+    album_image_exists,
+    artist_image_exists,
+    get_or_create_image,
+    song_image_exists,
+    upsert_album_image,
+    upsert_artist_profile,
+    upsert_song_image,
+    with_image_connection,
+)
 
 
 @dataclass
@@ -15,6 +32,8 @@ class VerificationResult:
     processed: int
     verified: int
     skipped: int
+    album_images_fetched: int = 0
+    artist_images_fetched: int = 0
 
 
 def _fetch_unverified_songs(limit: int | None) -> list[dict]:
@@ -106,114 +125,10 @@ def _replace_song_genres(cur, sha_id: str, genres: Iterable[str]) -> None:
         )
 
 
-def _resolve_with_parsing_strategies(
-    title: str,
-    artist: str | None,
-    artists: list[str],
-    album: str | None,
-    duration_sec: int | None,
-    min_score: int | None,
-    rate_limit_seconds: float | None,
-) -> RecordingMatch | None:
-    """
-    Attempt to resolve metadata using intelligent filename parsing.
-
-    Tries multiple strategies in order:
-    1. Use existing metadata (if available)
-    2. Parse filename to extract artist/title and search with parsed data
-    3. Fall back to original title-only search
-
-    Returns the best match found, or None if no valid match exists.
-    """
-    # Strategy 1: Try with existing metadata first (if we have artist info)
-    if artist or artists:
-        match = resolve_match(
-            title,
-            artist,
-            artists=artists,
-            album=album,
-            duration_sec=duration_sec,
-            min_score=min_score,
-            rate_limit_seconds=rate_limit_seconds,
-        )
-        if match:
-            return match
-
-    # Strategy 2: Check if we should parse the filename for additional metadata
-    if should_parse_filename(title, artist):
-        parsed_options = parse_filename(title)
-
-        # Try each parsed option in order of confidence
-        for parsed in parsed_options:
-            if parsed.confidence < 0.5:
-                # Skip low-confidence parses unless we have nothing else
-                break
-
-            # Build artist list for this attempt
-            attempt_artists = []
-            if parsed.artist:
-                attempt_artists.append(parsed.artist)
-            # Add existing artists as fallback
-            if artists:
-                attempt_artists.extend(artists)
-
-            # Attempt resolution with parsed metadata
-            match = resolve_match(
-                parsed.title,
-                parsed.artist,
-                artists=attempt_artists if attempt_artists else None,
-                album=album,
-                duration_sec=duration_sec,
-                min_score=min_score,
-                rate_limit_seconds=rate_limit_seconds,
-            )
-
-            if match:
-                # Validate that the match reasonably corresponds to our parsed data
-                # Check if matched artist is similar to parsed artist
-                if parsed.artist:
-                    from .musicbrainz_client import _best_artist_similarity, _normalize_text
-
-                    parsed_artist_similarity = _best_artist_similarity(
-                        [parsed.artist],
-                        match.artists,
-                    )
-                    # Require decent artist match when we parsed an artist
-                    if parsed_artist_similarity < 0.6:
-                        continue
-
-                    # Also check title similarity
-                    from .musicbrainz_client import _similarity
-
-                    title_similarity = _similarity(
-                        _normalize_text(parsed.title),
-                        _normalize_text(match.title),
-                    )
-                    if title_similarity < 0.7:
-                        continue
-
-                return match
-
-    # Strategy 3: Fall back to original title search (no artist)
-    # This is already attempted within resolve_match when artist searches fail,
-    # but we can try it explicitly with lower thresholds
-    if not artist and not artists:
-        match = resolve_match(
-            title,
-            None,
-            artists=None,
-            album=album,
-            duration_sec=duration_sec,
-            min_score=min_score,
-            rate_limit_seconds=rate_limit_seconds,
-        )
-        if match:
-            return match
-
-    return None
 
 
-def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
+def _apply_match(cur, sha_id: str, match: MetadataMatch) -> None:
+    """Apply metadata match to song record."""
     cur.execute(
         """
         UPDATE metadata.songs
@@ -239,7 +154,7 @@ def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
             match.duration_sec,
             match.release_year,
             match.track_number,
-            config.VERIFICATION_SOURCE,
+            match.source,  # Use the actual source instead of hardcoded config
             match.score,
             match.mbid,
             match.release_id,
@@ -249,21 +164,186 @@ def _apply_match(cur, sha_id: str, match: RecordingMatch) -> None:
     )
 
 
+def _fetch_images_for_song(
+    sha_id: str,
+    match: MetadataMatch,
+    rate_limit_seconds: float | None,
+    log_callback: Callable[[str], None] | None = None,
+) -> tuple[int, int]:
+    """
+    Fetch album cover and artist image for a verified song.
+    Returns (album_images_fetched, artist_images_fetched) tuple.
+    """
+    def log(message: str) -> None:
+        """Log message to console and optionally to callback."""
+        if log_callback:
+            log_callback(message)
+
+    album_images = 0
+    artist_images = 0
+
+    # Use separate image database connection
+    with with_image_connection() as image_conn:
+        with image_conn.cursor() as image_cur:
+            # Check if song already has cover art
+            has_song_image = song_image_exists(image_cur, sha_id, config.IMAGE_TYPE_COVER)
+
+            album_key = _album_key(match.album, match.artists[0] if match.artists else None)
+            has_album_image = album_image_exists(image_cur, album_key, config.IMAGE_TYPE_COVER) if album_key else False
+
+            # Fetch album cover if missing
+            if not has_song_image or not has_album_image:
+                log(f"    → Fetching album cover art...")
+                try:
+                    image_bytes, mime_type, image_url, source_name = _fetch_album_cover_multi_source(
+                        match.title,
+                        match.artists[0] if match.artists else None,
+                        match.release_id,
+                        rate_limit_seconds,
+                        log_callback,
+                    )
+
+                    if image_bytes and mime_type:
+                        # Store the image
+                        image_id, _sha = get_or_create_image(
+                            image_cur,
+                            image_bytes,
+                            mime_type,
+                            source_name=source_name or config.IMAGE_SOURCE_COVER_ART,
+                            source_url=image_url,
+                        )
+
+                        # Link to song
+                        if not has_song_image:
+                            upsert_song_image(image_cur, sha_id, image_id, config.IMAGE_TYPE_COVER)
+
+                        # Link to album
+                        if match.album and album_key and not has_album_image:
+                            upsert_album_image(
+                                image_cur,
+                                album_key,
+                                match.album,
+                                match.artists[0] if match.artists else None,
+                                image_id,
+                                config.IMAGE_TYPE_COVER,
+                            )
+                            album_images = 1
+
+                        log(f"    ✓ Album cover fetched from {source_name}")
+                    else:
+                        log(f"    → No album cover found")
+                except Exception as e:  # noqa: BLE001
+                    log(f"    ✗ Failed to fetch album cover: {str(e)}")
+
+            # Fetch artist image if missing
+            if match.artists:
+                artist_name = match.artists[0]
+                has_artist_image = artist_image_exists(image_cur, artist_name)
+
+                if not has_artist_image:
+                    log(f"    → Fetching artist image for {artist_name}...")
+                    try:
+                        # Get MusicBrainz artist info if available
+                        musicbrainz_artist = None
+                        try:
+                            musicbrainz_artist = _search_artist_by_name(artist_name, rate_limit_seconds)
+                        except Exception:  # noqa: BLE001
+                            pass
+
+                        # Fetch image from multiple sources
+                        image_url, image_source = _fetch_artist_image_multi_source(
+                            artist_name,
+                            musicbrainz_artist,
+                            rate_limit_seconds,
+                            log_callback,
+                        )
+
+                        if image_url:
+                            # Download the image
+                            image_bytes, mime_type = _download_binary(
+                                image_url,
+                                config.IMAGE_REQUEST_TIMEOUT_SEC,
+                                config.IMAGE_MAX_BYTES,
+                            )
+
+                            if image_bytes and mime_type:
+                                # Store the image
+                                image_id, _sha = get_or_create_image(
+                                    image_cur,
+                                    image_bytes,
+                                    mime_type,
+                                    source_name=image_source or config.IMAGE_SOURCE_MUSICBRAINZ,
+                                    source_url=image_url,
+                                )
+
+                                # Create artist profile
+                                profile = {
+                                    "artist": musicbrainz_artist or {},
+                                    "fetched_at": __import__('time').time(),
+                                    "source": image_source or config.IMAGE_SOURCE_MUSICBRAINZ,
+                                }
+
+                                upsert_artist_profile(
+                                    image_cur,
+                                    artist_name,
+                                    profile,
+                                    image_id,
+                                    source_name=image_source,
+                                    source_url=image_url,
+                                )
+
+                                artist_images = 1
+                                log(f"    ✓ Artist image fetched from {image_source}")
+                            else:
+                                log(f"    → No artist image found")
+                        else:
+                            log(f"    → No artist image found")
+                    except Exception as e:  # noqa: BLE001
+                        log(f"    ✗ Failed to fetch artist image: {str(e)}")
+
+            # Commit image database changes
+            image_conn.commit()
+
+    return (album_images, artist_images)
+
+
 def verify_unverified_songs(
     limit: int | None = None,
     min_score: int | None = None,
     rate_limit_seconds: float | None = None,
     dry_run: bool = False,
+    status_callback: Callable[[str], None] | None = None,
 ) -> VerificationResult:
+    """
+    Verify unverified songs using multi-source metadata resolution.
+
+    Args:
+        limit: Maximum number of songs to verify
+        min_score: Minimum match score to accept
+        rate_limit_seconds: Rate limit for API requests
+        dry_run: If True, don't actually update the database
+        status_callback: Optional callback for status updates (receives status messages)
+
+    Returns:
+        VerificationResult with counts of processed, verified, and skipped songs
+    """
     configure_client(rate_limit_seconds=rate_limit_seconds)
 
     songs = _fetch_unverified_songs(limit)
     processed = 0
     verified = 0
     skipped = 0
+    album_images_fetched = 0
+    artist_images_fetched = 0
     total = len(songs)
 
-    print(f"\nStarting metadata verification for {total} song(s)...\n")
+    def log(message: str) -> None:
+        """Log message to console and optionally to status callback."""
+        print(message)
+        if status_callback:
+            status_callback(message)
+
+    log(f"\nStarting metadata verification for {total} song(s)...\n")
 
     with get_connection() as conn:
         with conn.cursor() as cur:
@@ -277,11 +357,15 @@ def verify_unverified_songs(
 
                 # Display current status
                 artist_display = artist or "Unknown Artist"
-                print(f"[{processed}/{total}] Verifying: {artist_display} - {title}")
+                log(f"[{processed}/{total}] Verifying: {artist_display} - {title}")
+
+                # Create a status callback for this specific song
+                def song_status(msg: str) -> None:
+                    log(f"  {msg}")
 
                 try:
-                    # Use intelligent parsing strategies for better metadata resolution
-                    match = _resolve_with_parsing_strategies(
+                    # Use multi-source resolver with intelligent parsing
+                    match = resolve_with_parsing(
                         title,
                         artist,
                         artists=artists,
@@ -289,29 +373,57 @@ def verify_unverified_songs(
                         duration_sec=duration_sec,
                         min_score=min_score,
                         rate_limit_seconds=rate_limit_seconds,
+                        status_callback=song_status,
                     )
                 except Exception as e:  # noqa: BLE001
-                    print(f"  ✗ Error: {str(e)}")
+                    log(f"  ✗ Error: {str(e)}")
                     skipped += 1
                     continue
+
                 if not match:
-                    print(f"  ✗ No match found")
+                    log(f"  ✗ No match found from any source")
                     skipped += 1
                     continue
 
                 if dry_run:
-                    print(f"  ✓ Match found (dry run): {match.artists[0] if match.artists else 'Unknown'} - {match.title} (score: {match.score})")
+                    match_artist = match.artists[0] if match.artists else "Unknown"
+                    log(f"  ✓ Match found (dry run): {match_artist} - {match.title} (source: {match.source}, score: {match.score})")
                     verified += 1
                     continue
 
+                # Apply the match to the database
                 _apply_match(cur, song["sha_id"], match)
                 if match.artists:
                     _replace_song_artists(cur, song["sha_id"], match.artists)
                 if match.tags:
                     _replace_song_genres(cur, song["sha_id"], match.tags)
-                print(f"  ✓ Verified: {match.artists[0] if match.artists else 'Unknown'} - {match.title} (score: {match.score})")
+
+                match_artist = match.artists[0] if match.artists else "Unknown"
+                log(f"  ✓ Verified: {match_artist} - {match.title} (source: {match.source}, score: {match.score})")
                 verified += 1
 
-            conn.commit()
+                # Fetch images for the verified song
+                try:
+                    album_delta, artist_delta = _fetch_images_for_song(
+                        song["sha_id"],
+                        match,
+                        rate_limit_seconds,
+                        song_status,
+                    )
+                    album_images_fetched += album_delta
+                    artist_images_fetched += artist_delta
+                except Exception as e:  # noqa: BLE001
+                    log(f"  ⚠ Image fetching failed: {str(e)}")
 
-    return VerificationResult(processed=processed, verified=verified, skipped=skipped)
+            if not dry_run:
+                conn.commit()
+
+    log(f"\nVerification complete: {verified}/{processed} verified, {skipped} skipped")
+    log(f"Images fetched: {album_images_fetched} album covers, {artist_images_fetched} artist images")
+    return VerificationResult(
+        processed=processed,
+        verified=verified,
+        skipped=skipped,
+        album_images_fetched=album_images_fetched,
+        artist_images_fetched=artist_images_fetched,
+    )

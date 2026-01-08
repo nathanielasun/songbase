@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -77,6 +77,7 @@ type PipelineForm = {
   download: boolean;
   verify: boolean;
   images: boolean;
+  runUntilEmpty: boolean;
 };
 
 type SettingsSnapshot = {
@@ -209,6 +210,7 @@ export default function LibraryPage() {
     download: true,
     verify: true,
     images: true,
+    runUntilEmpty: false,
   });
   const [verifyForm, setVerifyForm] = useState({
     limit: '',
@@ -222,6 +224,16 @@ export default function LibraryPage() {
     rateLimit: '',
     dryRun: false,
   });
+  const [liveVerificationStatus, setLiveVerificationStatus] = useState<string[]>([]);
+  const [verificationInProgress, setVerificationInProgress] = useState(false);
+  const liveStatusRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll to bottom when new status messages arrive
+  useEffect(() => {
+    if (liveStatusRef.current && verificationInProgress) {
+      liveStatusRef.current.scrollTop = liveStatusRef.current.scrollHeight;
+    }
+  }, [liveVerificationStatus, verificationInProgress]);
 
   const queueSummary = useMemo(() => {
     const queueCounts = stats.queue || {};
@@ -622,6 +634,7 @@ export default function LibraryPage() {
         process_limit: pipelineForm.processLimit ? Number(pipelineForm.processLimit) : undefined,
         verify: pipelineForm.verify,
         images: pipelineForm.images,
+        run_until_empty: pipelineForm.runUntilEmpty,
       };
       await fetchJson('/api/library/pipeline/run', {
         method: 'POST',
@@ -759,26 +772,75 @@ export default function LibraryPage() {
       setActionError('Verification settings must be valid numbers.');
       return;
     }
-    const payload: Record<string, unknown> = {
-      dry_run: verifyForm.dryRun,
-    };
-    if (limit !== null) payload.limit = limit;
-    if (minScore !== null) payload.min_score = minScore;
-    if (rateLimit !== null) payload.rate_limit = rateLimit;
 
     setMetadataBusy(true);
+    setVerificationInProgress(true);
+    setLiveVerificationStatus(['Starting metadata verification...']);
+
     try {
-      await fetchJson('/api/library/metadata/verify', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      setActionMessage('Metadata verification started.');
-      refreshMetadataStatus();
+      // Build query parameters for SSE endpoint
+      const params = new URLSearchParams();
+      if (limit !== null) params.set('limit', limit.toString());
+      if (minScore !== null) params.set('min_score', minScore.toString());
+
+      const url = `/api/processing/metadata/verify-stream${params.toString() ? `?${params.toString()}` : ''}`;
+
+      // Connect to SSE endpoint
+      const eventSource = new EventSource(url);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'status') {
+            // Append status message
+            setLiveVerificationStatus((prev) => [...prev, data.message]);
+          } else if (data.type === 'complete') {
+            // Verification complete
+            const albumImagesMsg = data.album_images > 0 ? `, ${data.album_images} album covers` : '';
+            const artistImagesMsg = data.artist_images > 0 ? `, ${data.artist_images} artist images` : '';
+            setLiveVerificationStatus((prev) => [
+              ...prev,
+              `\nVerification complete: ${data.verified}/${data.processed} verified, ${data.skipped} skipped${albumImagesMsg}${artistImagesMsg}`,
+            ]);
+            setActionMessage(`Verification complete: ${data.verified}/${data.processed} verified`);
+            eventSource.close();
+            setVerificationInProgress(false);
+            setMetadataBusy(false);
+            refreshMetadataStatus();
+            refreshStats();
+          } else if (data.type === 'error') {
+            // Error occurred
+            setLiveVerificationStatus((prev) => [...prev, `\nError: ${data.message}`]);
+            setActionError(data.message);
+            eventSource.close();
+            setVerificationInProgress(false);
+            setMetadataBusy(false);
+          }
+        } catch (parseError) {
+          console.error('Failed to parse SSE message:', parseError);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error('SSE error:', error);
+        setActionError('Connection to verification stream lost.');
+        eventSource.close();
+        setVerificationInProgress(false);
+        setMetadataBusy(false);
+      };
+
+      // Store event source to allow cancellation
+      (eventSource as any)._cleanup = () => {
+        eventSource.close();
+        setVerificationInProgress(false);
+        setMetadataBusy(false);
+      };
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to start verification.'
       );
-    } finally {
+      setVerificationInProgress(false);
       setMetadataBusy(false);
     }
   };
@@ -1246,6 +1308,20 @@ export default function LibraryPage() {
                       />
                       Sync images
                     </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={pipelineForm.runUntilEmpty}
+                        onChange={(e) =>
+                          setPipelineForm((prev) => ({
+                            ...prev,
+                            runUntilEmpty: e.target.checked,
+                          }))
+                        }
+                        className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                      />
+                      Run until queue is empty
+                    </label>
                   </div>
 
                   <div className="flex flex-wrap items-center justify-between gap-4 mt-6">
@@ -1569,7 +1645,7 @@ export default function LibraryPage() {
                     <h2 className="text-xl font-semibold">Metadata Verification</h2>
                   </div>
                   <p className="text-sm text-gray-400 mt-2">
-                    Resolve unverified songs with MusicBrainz and update core metadata.
+                    Resolve unverified songs using MusicBrainz, Spotify, Wikidata, and Cover Art Archive. Intelligently parses filenames and tries all sources to find the best metadata match.
                   </p>
                   <div className="grid gap-4 mt-4 md:grid-cols-3">
                     <label className="text-sm text-gray-300">
@@ -1627,17 +1703,35 @@ export default function LibraryPage() {
                     <div className="text-sm text-gray-400">
                       Status:{' '}
                       <span className="text-white font-semibold">
-                        {metadataStatus.verification.running ? 'Running' : 'Idle'}
+                        {verificationInProgress || metadataStatus.verification.running ? 'Running' : 'Idle'}
                       </span>
                     </div>
                     <button
                       onClick={handleVerifyMetadata}
-                      disabled={metadataBusy || metadataStatus.verification.running}
+                      disabled={metadataBusy || metadataStatus.verification.running || verificationInProgress}
                       className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
                     >
                       Run verification
                     </button>
                   </div>
+
+                  {/* Live Status Updates */}
+                  {verificationInProgress && liveVerificationStatus.length > 0 && (
+                    <div
+                      ref={liveStatusRef}
+                      className="mt-4 rounded-xl bg-gray-950/50 border border-gray-700 p-4 max-h-96 overflow-y-auto"
+                    >
+                      <p className="text-xs uppercase text-gray-500 mb-2">Live Status</p>
+                      <div className="space-y-1 font-mono text-xs text-gray-300">
+                        {liveVerificationStatus.map((status, idx) => (
+                          <div key={idx} className="whitespace-pre-wrap">
+                            {status}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
                     <div>
                       <p className="text-xs uppercase text-gray-500">Last run</p>

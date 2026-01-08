@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api.routes import songs, processing, library, settings
+from backend.api.routes import songs, processing, library, settings, acquisition
 from backend.processing import dependencies
 from backend.db import local_postgres
 
@@ -24,6 +24,7 @@ app.include_router(songs.router, prefix="/api/songs", tags=["songs"])
 app.include_router(processing.router, prefix="/api/processing", tags=["processing"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
+app.include_router(acquisition.router, prefix="/api/acquisition", tags=["acquisition"])
 
 @app.on_event("startup")
 async def ensure_runtime_dependencies() -> None:

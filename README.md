@@ -96,10 +96,37 @@ source ~/.bashrc
 
 ### Metadata Sources
 
-- **MusicBrainz** (Primary, always enabled) - Free music encyclopedia
-- **Cover Art Archive** (Always enabled) - Free album covers
-- **Wikidata** (Always enabled) - Free artist images from Wikimedia Commons
-- **Spotify** (Optional) - Commercial music service (requires API key)
+The metadata verification pipeline uses multiple sources to ensure comprehensive coverage:
+
+- **MusicBrainz** (Primary, always enabled) - Free music encyclopedia for core metadata
+- **Cover Art Archive** (Always enabled) - Free album cover repository
+- **Wikidata** (Always enabled) - Free artist images and information from Wikimedia Commons
+- **Spotify** (Optional) - Commercial music service for additional metadata coverage (requires API key)
+
+### Integrated Metadata Verification with Image Fetching
+
+The verification pipeline now automatically fetches missing images during metadata verification:
+
+1. **Intelligent Filename Parsing with Progressive Title Simplification**: When a song has minimal metadata, the pipeline uses advanced parsing strategies:
+   - **Pattern extraction**: Parses filenames to extract artist and title (e.g., "ALLEYCVT - BACK2LIFE" → artist: "ALLEYCVT", title: "BACK2LIFE")
+   - **Progressive qualifier stripping**: Automatically removes common video/audio qualifiers to improve matching:
+     - "Marquez - Firemen Official Visualizer" → tries "Firemen Official Visualizer", then "Firemen Visualizer", then "Firemen"
+     - "Back2Life (Official Music Video)" → tries original, then "Back2Life Music Video", then "Back2Life"
+     - Handles: Official Video, Visualizer, Lyric Video, HD/HQ/4K, Live, Acoustic, Remastered, and many more
+   - **Smart fallbacks**: If a search fails with extra qualifiers, automatically retries with progressively cleaner titles
+
+2. **Multi-Source Verification**: For each song, the pipeline tries all sources in sequence:
+   - MusicBrainz (highest priority for accuracy)
+   - Spotify (if configured, for modern commercial tracks)
+   - Wikidata (for additional artist information)
+
+3. **Automatic Image Fetching**: After successfully verifying a song, the pipeline immediately fetches:
+   - **Album cover art** from Cover Art Archive, Spotify, or other sources
+   - **Artist profile images** from Wikidata (artist photos), MusicBrainz, or Spotify
+
+4. **Real-Time Status Updates**: The verification UI shows live status updates as each source is queried and images are fetched, providing complete visibility into the verification process.
+
+All verification and image fetching happens in a single operation, ensuring that verified songs immediately have complete metadata and artwork.
 
 ## Project Structure
 
@@ -138,6 +165,8 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 - **Sync images default**: Image sync is enabled by default; toggle it in Settings or per-run in the pipeline form.
 - **Sources view**: The Downloads tab also shows entries from `backend/processing/acquisition_pipeline/sources.jsonl`.
 - **Queue de-dup**: Sources already queued move out of the sources list and appear only in the pipeline queue list.
+- **Automatic queue cleanup**: Songs are automatically removed from the queue once they reach "stored" or "duplicate" status to prevent duplication.
+- **Run until empty**: Optional checkbox on the pipeline form to automatically process batches until the queue is completely empty.
 - **Queue pagination**: The pipeline queue table is paged (10/25/50/100 per page).
 - **Run details**: The Downloads tab shows live pipeline run details (last event, config, and paths).
 - **Seed sources**: Use the Downloads tab to insert `sources.jsonl` entries into the queue.
@@ -181,6 +210,7 @@ SONGBASE_DATABASE_URL=postgres://... python backend/processing/orchestrator.py -
 ```
 
 Add `--images` to sync cover art and artist profiles after verification (requires `SONGBASE_IMAGE_DATABASE_URL`).
+Add `--run-until-empty` to automatically continue processing batches until the queue is completely empty.
 
 ## Local Postgres Databases
 

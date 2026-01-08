@@ -158,5 +158,14 @@ def artist_profile_exists(cur, artist_name: str) -> bool:
     return cur.fetchone() is not None
 
 
+def artist_image_exists(cur, artist_name: str) -> bool:
+    """Check if artist profile exists AND has an image."""
+    cur.execute(
+        "SELECT 1 FROM media.artist_profiles WHERE artist_name = %s AND image_id IS NOT NULL",
+        (artist_name,),
+    )
+    return cur.fetchone() is not None
+
+
 def with_image_connection():
     return get_image_connection()

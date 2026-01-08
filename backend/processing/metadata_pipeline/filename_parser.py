@@ -6,6 +6,39 @@ import re
 from dataclasses import dataclass
 from typing import Iterator
 
+# Common qualifiers to progressively strip from titles
+# Ordered from most specific to least specific
+TITLE_QUALIFIERS = [
+    # Official designations
+    r"\b(?:official\s+)?(?:music\s+)?video\b",
+    r"\b(?:official\s+)?visualizer\b",
+    r"\b(?:official\s+)?audio\b",
+    r"\blyric\s+video\b",
+    r"\blyrics?\b",
+
+    # Video quality indicators
+    r"\b(?:4K|HD|HQ|UHD|1080p|720p|480p)\b",
+
+    # Performance types
+    r"\b(?:live|acoustic|unplugged)\b",
+    r"\b(?:live\s+(?:at|from|in|@))\s+[^\[\(]+",
+
+    # Version types
+    r"\b(?:remaster(?:ed)?|remastered\s+\d{4})\b",
+    r"\b(?:remix|extended|radio\s+edit|album\s+version|single\s+version)\b",
+    r"\b(?:explicit|clean)\s+version\b",
+
+    # Common abbreviations
+    r"\bM\s*V\b",
+    r"\bMV\b",
+
+    # Parenthetical/bracketed qualifiers
+    r"\s*[\[\(]\s*(?:official|audio|video|visualizer|lyric|lyrics|hd|hq|4k|mv)\s*[\]\)]",
+    r"\s*[\[\(]\s*(?:official\s+)?(?:music\s+)?video\s*[\]\)]",
+    r"\s*[\[\(]\s*(?:official\s+)?visualizer\s*[\]\)]",
+    r"\s*[\[\(]\s*(?:lyric\s+)?video\s*[\]\)]",
+]
+
 
 @dataclass(frozen=True)
 class ParsedMetadata:
@@ -186,6 +219,72 @@ def _extract_parentheses_pattern(filename: str) -> Iterator[ParsedMetadata]:
             )
 
 
+def _extract_camelcase_pattern(filename: str) -> Iterator[ParsedMetadata]:
+    """
+    Extract from camelCase or PascalCase patterns where capitalization indicates word boundaries.
+
+    Examples:
+        "ALLEYCVTBack2Life" -> might split if clear case transition
+        "ArtistNameSongTitle" -> look for case transitions
+    """
+    cleaned = _clean_text(filename)
+
+    # Look for transition from all-caps to mixed case (common pattern)
+    # Example: "ALLEYCVTBack2Life" or "JAMIROQUAISeven"
+    match = re.match(r"^([A-Z]{2,}[A-Z])([A-Z][a-z].+)$", cleaned)
+    if match:
+        artist_part = match.group(1).strip()
+        title_part = match.group(2).strip()
+
+        if len(artist_part) >= 2 and len(title_part) >= 2:
+            yield ParsedMetadata(
+                artist=artist_part,
+                title=title_part,
+                confidence=0.4
+            )
+
+    # Look for clear capitalization boundaries (e.g., "ArtistName SongTitle")
+    # Split on transitions from lowercase to uppercase
+    parts = re.split(r'(?<=[a-z])(?=[A-Z])', cleaned)
+    if len(parts) >= 2:
+        # Try splitting at the first major boundary
+        artist_candidate = parts[0].strip()
+        title_candidate = ' '.join(parts[1:]).strip()
+
+        if (len(artist_candidate) >= 2 and len(title_candidate) >= 2 and
+            _is_likely_artist_name(artist_candidate)):
+            yield ParsedMetadata(
+                artist=artist_candidate,
+                title=title_candidate,
+                confidence=0.3
+            )
+
+
+def _extract_track_number_pattern(filename: str) -> Iterator[ParsedMetadata]:
+    """
+    Extract from filenames with track numbers like "01 Artist - Title" or "Track 01 - Artist - Title".
+
+    Examples:
+        "01 AOA - Miniskirt" -> artist="AOA", title="Miniskirt"
+        "01. JAMIROQUAI - Seven Days" -> artist="JAMIROQUAI", title="Seven Days"
+    """
+    cleaned = _clean_text(filename)
+
+    # Remove leading track numbers (various formats)
+    # Patterns: "01 ", "01. ", "Track 01 ", "01 - ", etc.
+    without_track = re.sub(r"^(?:track\s*)?\d{1,3}[\s.\-:]+", "", cleaned, flags=re.IGNORECASE)
+
+    if without_track != cleaned and len(without_track) >= 5:
+        # Now try to parse the rest with dash pattern
+        for result in _extract_dash_pattern(without_track):
+            # Slightly reduce confidence since we had to strip track number
+            yield ParsedMetadata(
+                artist=result.artist,
+                title=result.title,
+                confidence=result.confidence * 0.95
+            )
+
+
 def _extract_no_artist_pattern(filename: str) -> Iterator[ParsedMetadata]:
     """
     Fall back to treating entire filename as title (no artist).
@@ -224,10 +323,12 @@ def parse_filename(filename: str) -> list[ParsedMetadata]:
     """
     results: list[ParsedMetadata] = []
 
-    # Try each extraction pattern
+    # Try each extraction pattern (ordered by reliability)
     results.extend(_extract_dash_pattern(filename))
+    results.extend(_extract_track_number_pattern(filename))
     results.extend(_extract_underscore_pattern(filename))
     results.extend(_extract_parentheses_pattern(filename))
+    results.extend(_extract_camelcase_pattern(filename))
     results.extend(_extract_no_artist_pattern(filename))
 
     # Sort by confidence descending
@@ -243,6 +344,78 @@ def parse_filename(filename: str) -> list[ParsedMetadata]:
             unique_results.append(result)
 
     return unique_results
+
+
+def generate_title_variants(title: str) -> list[str]:
+    """
+    Generate progressive title variants by stripping common qualifiers.
+
+    This function creates multiple versions of a title by progressively removing
+    common video/audio qualifiers like "Official Video", "Visualizer", etc.
+
+    Args:
+        title: The original title to generate variants from
+
+    Returns:
+        List of title variants, from most specific to most stripped
+        Always includes the original title as the first variant
+
+    Examples:
+        >>> generate_title_variants("Firemen Official Visualizer")
+        ['Firemen Official Visualizer', 'Firemen Visualizer', 'Firemen']
+
+        >>> generate_title_variants("Back2Life (Official Music Video)")
+        ['Back2Life (Official Music Video)', 'Back2Life Music Video', 'Back2Life']
+
+        >>> generate_title_variants("Seven Days In Sunny June Lyric Video HD")
+        ['Seven Days In Sunny June Lyric Video HD', 'Seven Days In Sunny June Lyric Video', ...]
+    """
+    variants = []
+    current_title = title.strip()
+
+    # Always try the original title first
+    variants.append(current_title)
+
+    # Keep track of what we've already tried to avoid duplicates
+    seen = {current_title.lower()}
+
+    # Progressively strip qualifiers
+    for qualifier_pattern in TITLE_QUALIFIERS:
+        # Try removing this qualifier (case-insensitive)
+        stripped = re.sub(qualifier_pattern, "", current_title, flags=re.IGNORECASE)
+
+        # Clean up multiple spaces and trim
+        stripped = re.sub(r"\s+", " ", stripped).strip()
+
+        # Remove trailing punctuation that might be left behind
+        stripped = re.sub(r"[,\-\s]+$", "", stripped).strip()
+
+        # Only add if it's different, non-empty, and not too short
+        if stripped and len(stripped) >= 2 and stripped.lower() not in seen:
+            variants.append(stripped)
+            seen.add(stripped.lower())
+            current_title = stripped  # Continue stripping from this version
+
+    # Also try removing everything in parentheses/brackets at the end
+    base_title = re.sub(r"\s*[\[\(][^\]\)]*[\]\)]\s*$", "", title).strip()
+    if base_title and base_title.lower() not in seen and len(base_title) >= 2:
+        variants.append(base_title)
+        seen.add(base_title.lower())
+
+    # Clean up empty parentheses/brackets and trailing punctuation
+    cleaned_variants = []
+    for variant in variants:
+        # Remove empty parentheses/brackets
+        cleaned = re.sub(r"\s*[\[\(]\s*[\]\)]\s*", " ", variant)
+        # Remove trailing dashes/hyphens
+        cleaned = re.sub(r"[\-–—]+\s*$", "", cleaned).strip()
+        # Clean up multiple spaces
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+
+        if cleaned and len(cleaned) >= 2:
+            cleaned_variants.append(cleaned)
+
+    return cleaned_variants
 
 
 def should_parse_filename(title: str, existing_artist: str | None) -> bool:

@@ -134,6 +134,7 @@ class OrchestratorConfig:
     image_limit_artists: int | None
     image_rate_limit: float | None
     sources_file: Path | None
+    run_until_empty: bool
 
 
 def _sha256_file(path: Path) -> str:
@@ -756,6 +757,11 @@ def _parse_args() -> OrchestratorConfig:
         default=None,
         help="Seconds to wait between external image requests.",
     )
+    parser.add_argument(
+        "--run-until-empty",
+        action="store_true",
+        help="Continue processing batches until queue is empty.",
+    )
 
     args = parser.parse_args()
     sources_file = Path(args.sources_file).expanduser().resolve() if args.sources_file else None
@@ -777,7 +783,21 @@ def _parse_args() -> OrchestratorConfig:
         image_limit_artists=args.image_limit_artists,
         image_rate_limit=args.image_rate_limit,
         sources_file=sources_file,
+        run_until_empty=args.run_until_empty,
     )
+
+
+def _count_queue_items(statuses: Iterable[str]) -> int:
+    """Count items in the queue with the given statuses."""
+    query = """
+        SELECT COUNT(*)
+        FROM metadata.download_queue
+        WHERE status = ANY(%s)
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (list(statuses),))
+            return cur.fetchone()[0]
 
 
 def run_orchestrator(
@@ -797,28 +817,59 @@ def run_orchestrator(
         inserted = acquisition_pipeline.ensure_sources(config.sources_file)
         print(f"Seeded download queue with {inserted} item(s).")
 
-    if config.download:
-        results = acquisition_pipeline.download_pending(
-            limit=config.download_limit,
-            workers=config.download_workers,
-            sources_file=config.sources_file,
-            output_dir=paths.preprocessed_cache_dir,
-            seed_sources=False,
-        )
-        print(
-            "Download results: "
-            f"{results['downloaded']} downloaded, {results['failed']} failed."
-        )
+    # Main processing loop - continues until queue is empty if run_until_empty is True
+    batch_num = 0
+    while True:
+        batch_num += 1
+        if config.run_until_empty and batch_num > 1:
+            print(f"\n--- Starting batch {batch_num} (run until empty mode) ---")
+            state.append({"stage": f"batch_{batch_num}_start", "ts": utc_now()})
 
-    process_statuses = {
-        acquisition_config.DOWNLOAD_STATUS_DOWNLOADED,
-        STATUS_PCM_READY,
-        STATUS_HASHED,
-        STATUS_EMBEDDED,
-    }
-    items = _fetch_processing_items(process_statuses, config.process_limit)
-    _process_items(items, paths, state, config)
+        # Download phase
+        if config.download:
+            results = acquisition_pipeline.download_pending(
+                limit=config.download_limit,
+                workers=config.download_workers,
+                sources_file=config.sources_file,
+                output_dir=paths.preprocessed_cache_dir,
+                seed_sources=False,
+            )
+            print(
+                "Download results: "
+                f"{results['downloaded']} downloaded, {results['failed']} failed."
+            )
 
+        # Processing phase
+        process_statuses = {
+            acquisition_config.DOWNLOAD_STATUS_DOWNLOADED,
+            STATUS_PCM_READY,
+            STATUS_HASHED,
+            STATUS_EMBEDDED,
+        }
+        items = _fetch_processing_items(process_statuses, config.process_limit)
+        _process_items(items, paths, state, config)
+
+        # Check if we should continue or exit the loop
+        if not config.run_until_empty:
+            # Single batch mode - exit after first iteration
+            break
+
+        # Count remaining items in queue (pending + processing statuses)
+        pending_count = _count_queue_items([acquisition_config.DOWNLOAD_STATUS_PENDING])
+        processing_count = _count_queue_items(list(process_statuses))
+        total_remaining = pending_count + processing_count
+
+        print(f"Queue status: {pending_count} pending, {processing_count} processing")
+
+        if total_remaining == 0:
+            print("Queue is empty. Stopping.")
+            state.append({"stage": "queue_empty", "ts": utc_now()})
+            break
+
+        # Continue to next batch
+        print(f"Queue has {total_remaining} items remaining, continuing...")
+
+    # Post-processing tasks (run once at the end)
     if config.verify and not config.dry_run:
         result = verify_unverified_songs()
         print(
