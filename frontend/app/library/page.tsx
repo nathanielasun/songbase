@@ -62,25 +62,6 @@ type PipelineStatus = {
   events?: Record<string, unknown>[];
 };
 
-type SourceItem = {
-  title: string;
-  artist?: string | null;
-  album?: string | null;
-  genre?: string | null;
-  search_query?: string | null;
-  source_url?: string | null;
-  queued?: boolean | null;
-  queue_status?: string | null;
-};
-
-type SourceResponse = {
-  items: SourceItem[];
-  total: number;
-  path: string;
-  queue_available: boolean;
-  last_seeded_at?: string | null;
-};
-
 type PipelineForm = {
   downloadLimit: string;
   processLimit: string;
@@ -118,38 +99,6 @@ type MetadataTaskState = {
 type MetadataStatus = {
   verification: MetadataTaskState;
   images: MetadataTaskState;
-};
-
-type UnlinkedSong = {
-  sha_id: string;
-  title: string;
-  artist?: string | null;
-  album?: string | null;
-};
-
-type UnlinkedResponse = {
-  items: UnlinkedSong[];
-  total: number;
-  limit: number;
-  offset: number;
-};
-
-type AlbumCatalogItem = {
-  album_id: string;
-  title: string;
-  artist_name?: string | null;
-  artist_id?: number | null;
-  release_year?: number | null;
-  track_count?: number | null;
-  song_count?: number | null;
-};
-
-type AlbumCatalogResponse = {
-  items: AlbumCatalogItem[];
-  total: number;
-  limit: number;
-  offset: number;
-  query?: string | null;
 };
 
 type CatalogSong = {
@@ -208,6 +157,48 @@ type AcquisitionSettings = {
   backends: Record<string, AcquisitionBackend>;
 };
 
+type VggishConfig = {
+  target_sample_rate: number;
+  frame_sec: number;
+  hop_sec: number;
+  stft_window_sec: number;
+  stft_hop_sec: number;
+  num_mel_bins: number;
+  mel_min_hz: number;
+  mel_max_hz: number;
+  log_offset: number;
+  device_preference: string;
+  gpu_memory_fraction: number;
+  gpu_allow_growth: boolean;
+  use_postprocess: boolean;
+};
+
+type VggishDevice = {
+  device_type: string;
+  device_name: string;
+  available: boolean;
+  details: Record<string, unknown>;
+};
+
+type VggishEmbeddingTask = {
+  running: boolean;
+  started_at?: string | null;
+  finished_at?: string | null;
+  last_error?: string | null;
+  last_result?: {
+    processed: number;
+    recalculated: number;
+    skipped: number;
+    failed: number;
+  } | null;
+};
+
+type VggishSettingsResponse = {
+  config: VggishConfig;
+  devices: VggishDevice[];
+  embedding_task: VggishEmbeddingTask;
+};
+
 const statusStyles: Record<string, string> = {
   pending: 'bg-gray-700 text-gray-200',
   downloading: 'bg-blue-600 text-white',
@@ -242,8 +233,6 @@ const MAX_IMPORT_LABEL = '5GB';
 export default function LibraryPage() {
   const [activeTab, setActiveTab] = useState<TabId>('manage');
   const [queueItems, setQueueItems] = useState<QueueItem[]>([]);
-  const [sourceItems, setSourceItems] = useState<SourceItem[]>([]);
-  const [sourceMeta, setSourceMeta] = useState<SourceResponse | null>(null);
   const [stats, setStats] = useState<LibraryStats>(emptyStats);
   const [pipelineStatus, setPipelineStatus] = useState<PipelineStatus>({
     running: false,
@@ -255,15 +244,6 @@ export default function LibraryPage() {
   const [settings, setSettings] = useState<SettingsSnapshot | null>(null);
   const [queuePage, setQueuePage] = useState(1);
   const [queuePageSize, setQueuePageSize] = useState(25);
-  const [unlinkedSongs, setUnlinkedSongs] = useState<UnlinkedSong[]>([]);
-  const [unlinkedTotal, setUnlinkedTotal] = useState(0);
-  const [albumCatalog, setAlbumCatalog] = useState<AlbumCatalogItem[]>([]);
-  const [albumSearch, setAlbumSearch] = useState('');
-  const [selectedAlbumId, setSelectedAlbumId] = useState('');
-  const [selectedSongIds, setSelectedSongIds] = useState<string[]>([]);
-  const [linkBusy, setLinkBusy] = useState(false);
-  const [linkMessage, setLinkMessage] = useState<string | null>(null);
-  const [linkError, setLinkError] = useState<string | null>(null);
   const [catalogItems, setCatalogItems] = useState<CatalogSong[]>([]);
   const [catalogTotal, setCatalogTotal] = useState(0);
   const [catalogQuery, setCatalogQuery] = useState('');
@@ -280,7 +260,6 @@ export default function LibraryPage() {
   const [songMetadataCollapsed, setSongMetadataCollapsed] = useState(false);
   const [metadataVerificationCollapsed, setMetadataVerificationCollapsed] = useState(false);
   const [imageSyncCollapsed, setImageSyncCollapsed] = useState(false);
-  const [linkUnassignedCollapsed, setLinkUnassignedCollapsed] = useState(false);
   const [songEditForm, setSongEditForm] = useState<SongEditForm>({
     title: '',
     artist: '',
@@ -294,7 +273,6 @@ export default function LibraryPage() {
   const [songSaveError, setSongSaveError] = useState<string | null>(null);
   const [songVerifyBusy, setSongVerifyBusy] = useState<Record<string, boolean>>({});
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
-  const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(true);
   const [isBackendCollapsed, setIsBackendCollapsed] = useState(true);
   const [isPipelineCollapsed, setIsPipelineCollapsed] = useState(false);
   const [isRecentActivityCollapsed, setIsRecentActivityCollapsed] = useState(true);
@@ -347,11 +325,63 @@ export default function LibraryPage() {
     album_images: number;
     artist_images: number;
   } | null>(null);
+
+  // VGGish Embeddings state
+  const [vggishSettings, setVggishSettings] = useState<VggishSettingsResponse | null>(null);
+  const [vggishCollapsed, setVggishCollapsed] = useState(false);
+  const [vggishBusy, setVggishBusy] = useState(false);
+  const [vggishForm, setVggishForm] = useState({
+    target_sample_rate: '16000',
+    frame_sec: '0.96',
+    hop_sec: '0.48',
+    stft_window_sec: '0.025',
+    stft_hop_sec: '0.010',
+    num_mel_bins: '64',
+    mel_min_hz: '125',
+    mel_max_hz: '7500',
+    log_offset: '0.01',
+    device_preference: 'auto',
+    gpu_memory_fraction: '0.8',
+    gpu_allow_growth: true,
+    use_postprocess: true,
+  });
+  const [vggishRecalcForm, setVggishRecalcForm] = useState({
+    limit: '',
+    force: false,
+  });
+  const [embeddingInProgress, setEmbeddingInProgress] = useState(false);
+  const [embeddingProgress, setEmbeddingProgress] = useState<{
+    processed: number;
+    recalculated: number;
+    skipped: number;
+    failed: number;
+    total: number;
+  } | null>(null);
+  const [liveEmbeddingStatus, setLiveEmbeddingStatus] = useState<string[]>([]);
+  const [currentEmbeddingStatus, setCurrentEmbeddingStatus] = useState<string | null>(null);
+  const liveEmbeddingStatusRef = useRef<HTMLDivElement>(null);
+  const embeddingStreamRef = useRef<EventSource | null>(null);
   const [currentVerificationStatus, setCurrentVerificationStatus] = useState<string | null>(
     null
   );
   const liveStatusRef = useRef<HTMLDivElement>(null);
   const verificationStreamRef = useRef<EventSource | null>(null);
+
+  // Image sync live status state
+  const [liveImageSyncStatus, setLiveImageSyncStatus] = useState<string[]>([]);
+  const [imageSyncInProgress, setImageSyncInProgress] = useState(false);
+  const [imageSyncProgress, setImageSyncProgress] = useState<{
+    songs_processed: number;
+    song_images: number;
+    album_images: number;
+    artist_profiles: number;
+    artist_images: number;
+    skipped: number;
+    failed: number;
+  } | null>(null);
+  const [currentImageSyncStatus, setCurrentImageSyncStatus] = useState<string | null>(null);
+  const liveImageSyncRef = useRef<HTMLDivElement>(null);
+  const imageSyncStreamRef = useRef<EventSource | null>(null);
 
   // Auto-scroll to bottom when new status messages arrive
   useEffect(() => {
@@ -359,6 +389,20 @@ export default function LibraryPage() {
       liveStatusRef.current.scrollTop = liveStatusRef.current.scrollHeight;
     }
   }, [liveVerificationStatus, verificationInProgress]);
+
+  // Auto-scroll for embedding status
+  useEffect(() => {
+    if (liveEmbeddingStatusRef.current && embeddingInProgress) {
+      liveEmbeddingStatusRef.current.scrollTop = liveEmbeddingStatusRef.current.scrollHeight;
+    }
+  }, [liveEmbeddingStatus, embeddingInProgress]);
+
+  // Auto-scroll for image sync live status
+  useEffect(() => {
+    if (liveImageSyncRef.current && imageSyncInProgress) {
+      liveImageSyncRef.current.scrollTop = liveImageSyncRef.current.scrollHeight;
+    }
+  }, [liveImageSyncStatus, imageSyncInProgress]);
 
   const queueSummary = useMemo(() => {
     const queueCounts = stats.queue || {};
@@ -401,19 +445,6 @@ export default function LibraryPage() {
     const paths = pipelineStatus.last_config?.paths;
     return (paths as Record<string, unknown>) || {};
   }, [pipelineStatus.last_config]);
-
-  const visibleSourceItems = useMemo(() => {
-    if (!sourceMeta?.queue_available) {
-      return sourceItems;
-    }
-    return sourceItems.filter((item) => !(item.queued || item.queue_status));
-  }, [sourceItems, sourceMeta?.queue_available]);
-
-  const sourceTotal = sourceMeta?.total ?? sourceItems.length;
-  const sourceRemaining = visibleSourceItems.length;
-  const sourceQueued = sourceMeta?.queue_available
-    ? Math.max(0, sourceTotal - sourceRemaining)
-    : 0;
 
   const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, {
@@ -478,17 +509,6 @@ export default function LibraryPage() {
     }
   }, []);
 
-  const refreshSources = useCallback(async () => {
-    try {
-      const data = await fetchJson<SourceResponse>('/api/library/sources?limit=200');
-      setSourceItems(data.items);
-      setSourceMeta(data);
-      setActionError(null);
-    } catch (error) {
-      setActionError(error instanceof Error ? error.message : 'Failed to load sources.');
-    }
-  }, []);
-
   const refreshMetadataStatus = useCallback(async () => {
     try {
       const data = await fetchJson<MetadataStatus>('/api/library/metadata/status');
@@ -501,39 +521,33 @@ export default function LibraryPage() {
     }
   }, []);
 
-  const refreshUnlinked = useCallback(async () => {
+  const refreshVggishSettings = useCallback(async () => {
     try {
-      const data = await fetchJson<UnlinkedResponse>(
-        '/api/library/songs/unlinked?limit=25&offset=0'
-      );
-      setUnlinkedSongs(data.items);
-      setUnlinkedTotal(data.total);
-      setLinkError(null);
+      const data = await fetchJson<VggishSettingsResponse>('/api/settings/vggish');
+      setVggishSettings(data);
+      // Update form with loaded config
+      setVggishForm({
+        target_sample_rate: String(data.config.target_sample_rate),
+        frame_sec: String(data.config.frame_sec),
+        hop_sec: String(data.config.hop_sec),
+        stft_window_sec: String(data.config.stft_window_sec),
+        stft_hop_sec: String(data.config.stft_hop_sec),
+        num_mel_bins: String(data.config.num_mel_bins),
+        mel_min_hz: String(data.config.mel_min_hz),
+        mel_max_hz: String(data.config.mel_max_hz),
+        log_offset: String(data.config.log_offset),
+        device_preference: data.config.device_preference,
+        gpu_memory_fraction: String(data.config.gpu_memory_fraction),
+        gpu_allow_growth: data.config.gpu_allow_growth,
+        use_postprocess: data.config.use_postprocess,
+      });
+      setActionError(null);
     } catch (error) {
-      setLinkError(error instanceof Error ? error.message : 'Failed to load unlinked songs.');
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to load VGGish settings.'
+      );
     }
   }, []);
-
-  const refreshAlbumCatalog = useCallback(
-    async (query: string) => {
-      const params = new URLSearchParams({ limit: '20', offset: '0' });
-      if (query.trim()) {
-        params.set('q', query.trim());
-      }
-      try {
-        const data = await fetchJson<AlbumCatalogResponse>(
-          `/api/library/albums?${params.toString()}`
-        );
-        setAlbumCatalog(data.items);
-        setLinkError(null);
-      } catch (error) {
-        setLinkError(
-          error instanceof Error ? error.message : 'Failed to load album catalog.'
-        );
-      }
-    },
-    []
-  );
 
   const refreshCatalog = useCallback(async () => {
     const params = new URLSearchParams({
@@ -632,9 +646,9 @@ export default function LibraryPage() {
     refreshStats();
     refreshPipeline();
     refreshSettings();
-    refreshSources();
     refreshAcquisitionSettings();
-  }, [refreshPipeline, refreshSettings, refreshStats, refreshSources, refreshAcquisitionSettings]);
+    refreshVggishSettings();
+  }, [refreshPipeline, refreshSettings, refreshStats, refreshAcquisitionSettings, refreshVggishSettings]);
 
   useEffect(() => {
     refreshQueue();
@@ -646,7 +660,6 @@ export default function LibraryPage() {
     const interval = window.setInterval(() => {
       refreshQueue();
       refreshPipeline();
-      refreshSources();
       refreshStats();
     }, intervalMs);
     return () => window.clearInterval(interval);
@@ -655,7 +668,6 @@ export default function LibraryPage() {
     pipelineStatus.running,
     refreshPipeline,
     refreshQueue,
-    refreshSources,
     refreshStats,
   ]);
 
@@ -663,25 +675,15 @@ export default function LibraryPage() {
     if (activeTab !== 'stats') return;
     refreshStats();
     refreshMetadataStatus();
-    refreshUnlinked();
-    refreshAlbumCatalog(albumSearch);
     refreshCatalog();
+    refreshVggishSettings();
   }, [
     activeTab,
-    refreshAlbumCatalog,
     refreshCatalog,
     refreshMetadataStatus,
     refreshStats,
-    refreshUnlinked,
+    refreshVggishSettings,
   ]);
-
-  useEffect(() => {
-    if (activeTab !== 'stats') return;
-    const timeout = window.setTimeout(() => {
-      refreshAlbumCatalog(albumSearch);
-    }, 250);
-    return () => window.clearTimeout(timeout);
-  }, [activeTab, albumSearch, refreshAlbumCatalog]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
@@ -1173,81 +1175,6 @@ export default function LibraryPage() {
     }
   };
 
-  const handleSeedSources = async () => {
-    setActionMessage(null);
-    setActionError(null);
-    setBusy(true);
-    try {
-      const result = await fetchJson<{ inserted: number; total: number; last_seeded_at?: string | null }>(
-        '/api/library/seed-sources',
-        {
-          method: 'POST',
-          body: JSON.stringify({}),
-        }
-      );
-      setActionMessage(
-        `Seeded ${result.inserted} of ${result.total} sources into the queue.`
-      );
-      setSourceMeta((prev) =>
-        prev
-          ? {
-              ...prev,
-              last_seeded_at: result.last_seeded_at ?? prev.last_seeded_at,
-            }
-          : prev
-      );
-      refreshQueue();
-      refreshSources();
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Failed to seed sources.jsonl.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleClearSources = async () => {
-    const total = sourceMeta?.total ?? sourceItems.length;
-    if (
-      !window.confirm(
-        `Clear ${total} sources from sources.jsonl? This cannot be undone.`
-      )
-    ) {
-      return;
-    }
-    setActionMessage(null);
-    setActionError(null);
-    setBusy(true);
-    try {
-      const result = await fetchJson<{ cleared: number; last_seeded_at?: string | null }>(
-        '/api/library/sources/clear',
-        {
-          method: 'POST',
-          body: JSON.stringify({}),
-        }
-      );
-      setActionMessage(`Cleared ${result.cleared} sources.jsonl entries.`);
-      setSourceMeta((prev) =>
-        prev
-          ? {
-              ...prev,
-              total: 0,
-              last_seeded_at: result.last_seeded_at ?? prev.last_seeded_at,
-            }
-          : prev
-      );
-      setSourceItems([]);
-      refreshSources();
-    } catch (error) {
-      setActionError(
-        error instanceof Error ? error.message : 'Failed to clear sources.jsonl.'
-      );
-    } finally {
-      setBusy(false);
-    }
-  };
-
   const handleClearQueue = async () => {
     const total = queueTotal;
     if (
@@ -1271,7 +1198,6 @@ export default function LibraryPage() {
       setActionMessage(`Cleared ${result.cleared} queued item(s).`);
       refreshQueue();
       refreshStats();
-      refreshSources();
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to clear the pipeline queue.'
@@ -1447,26 +1373,98 @@ export default function LibraryPage() {
       setActionError('Image sync settings must be valid numbers.');
       return;
     }
-    const payload: Record<string, unknown> = {
-      dry_run: imageForm.dryRun,
-    };
-    if (limitSongs !== null) payload.limit_songs = limitSongs;
-    if (limitArtists !== null) payload.limit_artists = limitArtists;
-    if (rateLimit !== null) payload.rate_limit = rateLimit;
 
     setMetadataBusy(true);
+    setImageSyncInProgress(true);
+    setLiveImageSyncStatus(['Starting image & profile sync...']);
+    setCurrentImageSyncStatus('Starting image & profile sync...');
+    setImageSyncProgress(null);
+
     try {
-      await fetchJson('/api/library/metadata/images', {
-        method: 'POST',
-        body: JSON.stringify(payload),
-      });
-      setActionMessage('Image/profile sync started.');
-      refreshMetadataStatus();
+      // Build query parameters for SSE endpoint
+      const params = new URLSearchParams();
+      if (limitSongs !== null) params.set('limit_songs', limitSongs.toString());
+      if (limitArtists !== null) params.set('limit_artists', limitArtists.toString());
+      if (rateLimit !== null) params.set('rate_limit', rateLimit.toString());
+      if (imageForm.dryRun) params.set('dry_run', 'true');
+
+      // Use direct backend URL for SSE to avoid Next.js proxy buffering
+      const url = `${SSE_BACKEND_URL}/api/processing/metadata/images-stream${params.toString() ? `?${params.toString()}` : ''}`;
+
+      // Connect to SSE endpoint
+      if (imageSyncStreamRef.current) {
+        imageSyncStreamRef.current.close();
+      }
+      const eventSource = new EventSource(url);
+      imageSyncStreamRef.current = eventSource;
+      setMetadataBusy(false);
+
+      eventSource.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.type === 'status') {
+            // Append status message
+            setLiveImageSyncStatus((prev) => [...prev, data.message]);
+            setCurrentImageSyncStatus(data.message);
+          } else if (data.type === 'progress') {
+            // Update progress counters
+            setImageSyncProgress({
+              songs_processed: data.songs_processed,
+              song_images: data.song_images,
+              album_images: data.album_images,
+              artist_profiles: data.artist_profiles,
+              artist_images: data.artist_images,
+              skipped: data.skipped,
+              failed: data.failed,
+            });
+          } else if (data.type === 'complete') {
+            // Sync complete
+            setLiveImageSyncStatus((prev) => [
+              ...prev,
+              `\nSync complete: ${data.songs_processed} songs processed, ${data.song_images} song images, ${data.album_images} album images, ${data.artist_profiles} artist profiles, ${data.artist_images} artist images`,
+            ]);
+            setCurrentImageSyncStatus(
+              `Sync complete: ${data.songs_processed} songs, ${data.song_images + data.album_images + data.artist_images} images`
+            );
+            setActionMessage(`Image sync complete: ${data.songs_processed} songs processed`);
+            eventSource.close();
+            imageSyncStreamRef.current = null;
+            setImageSyncInProgress(false);
+            setMetadataBusy(false);
+            setImageSyncProgress(null);
+            refreshMetadataStatus();
+            refreshStats();
+          } else if (data.type === 'error') {
+            // Error occurred
+            setLiveImageSyncStatus((prev) => [...prev, `\nError: ${data.message}`]);
+            setCurrentImageSyncStatus(`Error: ${data.message}`);
+            setActionError(data.message);
+            eventSource.close();
+            imageSyncStreamRef.current = null;
+            setImageSyncInProgress(false);
+            setMetadataBusy(false);
+            setImageSyncProgress(null);
+          }
+        } catch (parseError) {
+          console.error('Failed to parse SSE message:', parseError);
+        }
+      };
+
+      eventSource.onerror = (error) => {
+        console.error('SSE error:', error);
+        setActionError('Connection to image sync stream lost.');
+        eventSource.close();
+        imageSyncStreamRef.current = null;
+        setImageSyncInProgress(false);
+        setMetadataBusy(false);
+        setCurrentImageSyncStatus('Connection to image sync stream lost.');
+      };
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to start image sync.'
       );
-    } finally {
+      setImageSyncInProgress(false);
       setMetadataBusy(false);
     }
   };
@@ -1476,56 +1474,158 @@ export default function LibraryPage() {
     setActionError(null);
     setMetadataBusy(true);
     try {
-      await fetchJson('/api/library/metadata/stop', {
-        method: 'POST',
-        body: JSON.stringify({ task: 'images' }),
-      });
+      const results = await Promise.allSettled([
+        fetchJson('/api/processing/metadata/images/stop', { method: 'POST' }),
+        fetchJson('/api/library/metadata/stop', {
+          method: 'POST',
+          body: JSON.stringify({ task: 'images' }),
+        }),
+      ]);
+      const success = results.some((result) => result.status === 'fulfilled');
+      if (!success) {
+        throw new Error('Stop request failed.');
+      }
       setActionMessage('Image sync stop requested.');
+      setCurrentImageSyncStatus('Stop requested.');
       refreshMetadataStatus();
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to stop image sync.'
       );
     } finally {
+      if (imageSyncStreamRef.current) {
+        imageSyncStreamRef.current.close();
+        imageSyncStreamRef.current = null;
+      }
+      setImageSyncInProgress(false);
       setMetadataBusy(false);
     }
   };
 
-  const toggleSongSelection = (shaId: string) => {
-    setSelectedSongIds((prev) =>
-      prev.includes(shaId) ? prev.filter((id) => id !== shaId) : [...prev, shaId]
-    );
+  // VGGish Embedding handlers
+  const handleSaveVggishConfig = async () => {
+    setVggishBusy(true);
+    setActionError(null);
+    setActionMessage(null);
+    try {
+      const payload: Record<string, unknown> = {};
+      const targetSr = parseInt(vggishForm.target_sample_rate, 10);
+      if (!isNaN(targetSr)) payload.target_sample_rate = targetSr;
+      const frameSec = parseFloat(vggishForm.frame_sec);
+      if (!isNaN(frameSec)) payload.frame_sec = frameSec;
+      const hopSec = parseFloat(vggishForm.hop_sec);
+      if (!isNaN(hopSec)) payload.hop_sec = hopSec;
+      const stftWin = parseFloat(vggishForm.stft_window_sec);
+      if (!isNaN(stftWin)) payload.stft_window_sec = stftWin;
+      const stftHop = parseFloat(vggishForm.stft_hop_sec);
+      if (!isNaN(stftHop)) payload.stft_hop_sec = stftHop;
+      const numMel = parseInt(vggishForm.num_mel_bins, 10);
+      if (!isNaN(numMel)) payload.num_mel_bins = numMel;
+      const melMin = parseInt(vggishForm.mel_min_hz, 10);
+      if (!isNaN(melMin)) payload.mel_min_hz = melMin;
+      const melMax = parseInt(vggishForm.mel_max_hz, 10);
+      if (!isNaN(melMax)) payload.mel_max_hz = melMax;
+      const logOff = parseFloat(vggishForm.log_offset);
+      if (!isNaN(logOff)) payload.log_offset = logOff;
+      payload.device_preference = vggishForm.device_preference;
+      const gpuMem = parseFloat(vggishForm.gpu_memory_fraction);
+      if (!isNaN(gpuMem)) payload.gpu_memory_fraction = gpuMem;
+      payload.gpu_allow_growth = vggishForm.gpu_allow_growth;
+      payload.use_postprocess = vggishForm.use_postprocess;
+
+      await fetchJson<VggishSettingsResponse>('/api/settings/vggish', {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      });
+      setActionMessage('VGGish configuration saved.');
+      refreshVggishSettings();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Failed to save VGGish config.');
+    } finally {
+      setVggishBusy(false);
+    }
   };
 
-  const handleLinkSongs = async () => {
-    setLinkMessage(null);
-    setLinkError(null);
-    if (!selectedAlbumId) {
-      setLinkError('Select an album to link.');
-      return;
+  const handleRecalculateEmbeddings = async () => {
+    if (embeddingInProgress) return;
+
+    // Close any existing stream
+    if (embeddingStreamRef.current) {
+      embeddingStreamRef.current.close();
+      embeddingStreamRef.current = null;
     }
-    if (selectedSongIds.length === 0) {
-      setLinkError('Select at least one song to link.');
-      return;
+
+    setEmbeddingInProgress(true);
+    setLiveEmbeddingStatus([]);
+    setEmbeddingProgress(null);
+    setCurrentEmbeddingStatus('Starting...');
+    setActionError(null);
+
+    const params = new URLSearchParams();
+    if (vggishRecalcForm.limit.trim()) {
+      params.set('limit', vggishRecalcForm.limit.trim());
     }
-    setLinkBusy(true);
+    if (vggishRecalcForm.force) {
+      params.set('force', 'true');
+    }
+
+    const url = `${SSE_BACKEND_URL}/api/settings/vggish/recalculate-stream?${params.toString()}`;
+    const eventSource = new EventSource(url);
+    embeddingStreamRef.current = eventSource;
+
+    eventSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'status') {
+          setLiveEmbeddingStatus((prev) => [...prev, data.message]);
+          setCurrentEmbeddingStatus(data.message);
+        } else if (data.type === 'progress') {
+          setEmbeddingProgress({
+            processed: data.processed,
+            recalculated: data.recalculated,
+            skipped: data.skipped,
+            failed: data.failed,
+            total: data.total,
+          });
+          refreshStats();
+        } else if (data.type === 'complete') {
+          setLiveEmbeddingStatus((prev) => [
+            ...prev,
+            `\nComplete: ${data.recalculated} recalculated, ${data.skipped} skipped, ${data.failed} failed`,
+          ]);
+          setCurrentEmbeddingStatus('Complete');
+          eventSource.close();
+          embeddingStreamRef.current = null;
+          setEmbeddingInProgress(false);
+          refreshVggishSettings();
+          refreshStats();
+        } else if (data.type === 'error') {
+          setLiveEmbeddingStatus((prev) => [...prev, `\nError: ${data.message}`]);
+          setCurrentEmbeddingStatus(`Error: ${data.message}`);
+          setActionError(data.message);
+          eventSource.close();
+          embeddingStreamRef.current = null;
+          setEmbeddingInProgress(false);
+        }
+      } catch (e) {
+        console.error('Failed to parse SSE message:', e);
+      }
+    };
+
+    eventSource.onerror = () => {
+      setCurrentEmbeddingStatus('Connection error');
+      setEmbeddingInProgress(false);
+      eventSource.close();
+      embeddingStreamRef.current = null;
+    };
+  };
+
+  const handleStopEmbeddingRecalc = async () => {
     try {
-      const result = await fetchJson<{ linked: number }>('/api/library/songs/link', {
-        method: 'POST',
-        body: JSON.stringify({
-          album_id: selectedAlbumId,
-          sha_ids: selectedSongIds,
-          mark_verified: true,
-        }),
-      });
-      setLinkMessage(`Linked ${result.linked} song(s) to album.`);
-      setSelectedSongIds([]);
-      refreshUnlinked();
-      refreshStats();
+      await fetchJson('/api/settings/vggish/recalculate/stop', { method: 'POST' });
+      setCurrentEmbeddingStatus('Stop requested...');
     } catch (error) {
-      setLinkError(error instanceof Error ? error.message : 'Failed to link songs.');
-    } finally {
-      setLinkBusy(false);
+      setActionError(error instanceof Error ? error.message : 'Failed to stop recalculation.');
     }
   };
 
@@ -1546,8 +1646,6 @@ export default function LibraryPage() {
                   refreshQueue();
                   refreshPipeline();
                   refreshMetadataStatus();
-                  refreshUnlinked();
-                  refreshAlbumCatalog(albumSearch);
                 }}
                 className="inline-flex items-center gap-2 rounded-full bg-gray-800 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-700"
               >
@@ -1908,133 +2006,6 @@ export default function LibraryPage() {
                         </div>
                       </div>
                     </div>
-                  )}
-                </section>
-
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex flex-wrap items-center justify-between gap-4">
-                    <button
-                      onClick={() => setIsSourcesCollapsed(!isSourcesCollapsed)}
-                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-                    >
-                      <QueueListIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Sources.jsonl</h2>
-                      {isSourcesCollapsed ? (
-                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
-                      ) : (
-                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
-                      )}
-                    </button>
-                    <div className="flex flex-wrap items-center gap-3 text-xs text-gray-400">
-                      <span>{sourceMeta?.path ?? 'backend/processing/acquisition_pipeline/sources.jsonl'}</span>
-                      {sourceMeta?.queue_available ? (
-                        <>
-                          <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
-                            {sourceRemaining} remaining
-                          </span>
-                          {sourceQueued > 0 && (
-                            <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
-                              {sourceQueued} in pipeline
-                            </span>
-                          )}
-                        </>
-                      ) : (
-                        <span className="rounded-full bg-gray-800 px-3 py-1 text-gray-300">
-                          {sourceTotal} entries
-                        </span>
-                      )}
-                      <span className="text-gray-500">
-                        Last seeded:{' '}
-                        {sourceMeta?.last_seeded_at
-                          ? new Date(sourceMeta.last_seeded_at).toLocaleString()
-                          : '--'}
-                      </span>
-                      <button
-                        onClick={handleSeedSources}
-                        disabled={busy || sourceMeta?.queue_available === false}
-                        className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
-                      >
-                        Seed into queue
-                      </button>
-                      <button
-                        onClick={handleClearSources}
-                        disabled={busy}
-                        className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
-                      >
-                        Clear sources
-                      </button>
-                    </div>
-                  </div>
-
-                  {!isSourcesCollapsed && (
-                    <>
-                      <p className="text-sm text-gray-400 mt-2">
-                        Items listed in the local sources file that are not yet in the pipeline queue.
-                      </p>
-                      {!sourceMeta?.queue_available && (
-                        <p className="text-xs text-amber-300 mt-2">
-                          Queue status unavailable (database offline).
-                        </p>
-                      )}
-                      {sourceMeta?.queue_available && (
-                        <p className="text-xs text-gray-500 mt-2">
-                          Sources already queued appear in the pipeline list below.
-                        </p>
-                      )}
-                      <div className="mt-4 overflow-x-auto">
-                        <table className="w-full text-left text-sm">
-                          <thead className="text-gray-400">
-                            <tr>
-                              <th className="py-2 pr-4">Title</th>
-                              <th className="py-2 pr-4">Artist</th>
-                              <th className="py-2 pr-4">Queued</th>
-                              <th className="py-2 pr-4">Status</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {visibleSourceItems.length === 0 && (
-                              <tr>
-                                <td colSpan={4} className="py-4 text-gray-500">
-                                  {sourceMeta?.queue_available
-                                    ? 'All sources.jsonl entries are already in the pipeline queue.'
-                                    : 'No sources.jsonl entries found.'}
-                                </td>
-                              </tr>
-                            )}
-                            {visibleSourceItems.map((item, index) => (
-                              <tr key={`${item.title}-${index}`} className="border-t border-gray-800">
-                                <td className="py-3 pr-4">
-                                  <p className="font-medium">{item.title}</p>
-                                  {item.album && (
-                                    <p className="text-xs text-gray-500">{item.album}</p>
-                                  )}
-                                </td>
-                                <td className="py-3 pr-4 text-gray-300">
-                                  {item.artist || 'Unknown'}
-                                </td>
-                                <td className="py-3 pr-4 text-gray-300">
-                                  {item.queued === null ? '--' : item.queued ? 'Yes' : 'No'}
-                                </td>
-                                <td className="py-3 pr-4">
-                                  {item.queue_status ? (
-                                    <span
-                                      className={`inline-flex rounded-full px-3 py-1 text-xs font-semibold ${
-                                        statusStyles[item.queue_status] ||
-                                        'bg-gray-800 text-gray-200'
-                                      }`}
-                                    >
-                                      {item.queue_status.replace(/_/g, ' ')}
-                                    </span>
-                                  ) : (
-                                    <span className="text-xs text-gray-500">--</span>
-                                  )}
-                                </td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
                   )}
                 </section>
 
@@ -2413,11 +2384,11 @@ export default function LibraryPage() {
                         <p className="text-xs text-gray-400">
                           {(event.ts as string) || 'timestamp'}
                         </p>
-                        {event.path && (
+                        {event.path ? (
                           <p className="text-xs text-gray-500 truncate">
                             {String(event.path)}
                           </p>
-                        )}
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -3171,11 +3142,11 @@ export default function LibraryPage() {
                     <div className="text-sm text-gray-400">
                       Status:{' '}
                       <span className="text-white font-semibold">
-                        {metadataStatus.images.running ? 'Running' : 'Idle'}
+                        {imageSyncInProgress || metadataStatus.images.running ? 'Running' : 'Idle'}
                       </span>
                     </div>
                     <div className="flex flex-wrap items-center gap-3">
-                      {metadataStatus.images.running && (
+                      {(imageSyncInProgress || metadataStatus.images.running) && (
                         <button
                           onClick={handleStopImageSync}
                           disabled={metadataBusy}
@@ -3186,13 +3157,80 @@ export default function LibraryPage() {
                       )}
                       <button
                         onClick={handleSyncImages}
-                        disabled={metadataBusy || metadataStatus.images.running}
+                        disabled={metadataBusy || metadataStatus.images.running || imageSyncInProgress}
                         className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
                       >
                         Sync images & profiles
                       </button>
                     </div>
                   </div>
+
+                  {(imageSyncInProgress || metadataStatus.images.running || currentImageSyncStatus) && (
+                    <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300">
+                      <p className="text-xs uppercase text-gray-500 mb-2">Current status</p>
+                      <p className="text-white">
+                        {currentImageSyncStatus || 'Waiting for updates...'}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Live Status Updates */}
+                  {liveImageSyncStatus.length > 0 && (
+                    <div className="mt-4 space-y-4">
+                      {/* Progress counters */}
+                      {imageSyncProgress && (
+                        <div className="rounded-xl bg-gray-950/50 border border-gray-700 p-4">
+                          <p className="text-xs uppercase text-gray-500 mb-3">Progress</p>
+                          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                            <div>
+                              <div className="text-2xl font-bold text-blue-400">{imageSyncProgress.songs_processed}</div>
+                              <div className="text-xs text-gray-400">Songs Processed</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-green-400">{imageSyncProgress.song_images}</div>
+                              <div className="text-xs text-gray-400">Song Images</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-purple-400">{imageSyncProgress.album_images}</div>
+                              <div className="text-xs text-gray-400">Album Images</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-pink-400">{imageSyncProgress.artist_profiles}</div>
+                              <div className="text-xs text-gray-400">Artist Profiles</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-orange-400">{imageSyncProgress.artist_images}</div>
+                              <div className="text-xs text-gray-400">Artist Images</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-yellow-400">{imageSyncProgress.skipped}</div>
+                              <div className="text-xs text-gray-400">Skipped</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-red-400">{imageSyncProgress.failed}</div>
+                              <div className="text-xs text-gray-400">Failed</div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live status log */}
+                      <div
+                        ref={liveImageSyncRef}
+                        className="rounded-xl bg-gray-950/50 border border-gray-700 p-4 max-h-96 overflow-y-auto"
+                      >
+                        <p className="text-xs uppercase text-gray-500 mb-2">Live Status</p>
+                        <div className="space-y-1 font-mono text-xs text-gray-300">
+                          {liveImageSyncStatus.map((status, idx) => (
+                            <div key={idx} className="whitespace-pre-wrap">
+                              {status}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
                     <div>
                       <p className="text-xs uppercase text-gray-500">Last run</p>
@@ -3230,113 +3268,383 @@ export default function LibraryPage() {
                   )}
                 </section>
 
+                {/* VGGish Embeddings Configuration */}
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
-                      <MagnifyingGlassIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Link Unassigned Songs</h2>
+                      <ChartBarIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">VGGish Embeddings</h2>
                     </div>
                     <button
-                      onClick={() => setLinkUnassignedCollapsed(!linkUnassignedCollapsed)}
+                      onClick={() => setVggishCollapsed(!vggishCollapsed)}
                       className="rounded-full p-1 text-gray-400 hover:text-white"
-                      title={linkUnassignedCollapsed ? "Expand" : "Collapse"}
+                      title={vggishCollapsed ? "Expand" : "Collapse"}
                     >
-                      {linkUnassignedCollapsed ? (
+                      {vggishCollapsed ? (
                         <ChevronDownIcon className="h-5 w-5" />
                       ) : (
                         <ChevronUpIcon className="h-5 w-5" />
                       )}
                     </button>
                   </div>
-                  {!linkUnassignedCollapsed && (
+                  {!vggishCollapsed && (
                     <>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Attach songs missing album or artist metadata to an existing album record.
-                  </p>
-                  <div className="grid gap-4 mt-4 md:grid-cols-2">
-                    <label className="text-sm text-gray-300">
-                      Album search
-                      <input
-                        value={albumSearch}
-                        onChange={(e) => setAlbumSearch(e.target.value)}
-                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
-                        placeholder="Search albums or artists"
-                      />
-                    </label>
-                    <label className="text-sm text-gray-300">
-                      Album selection
-                      <select
-                        value={selectedAlbumId}
-                        onChange={(e) => setSelectedAlbumId(e.target.value)}
-                        className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
-                      >
-                        <option value="">Select an album</option>
-                        {albumCatalog.map((album) => (
-                          <option key={album.album_id} value={album.album_id}>
-                            {album.title} — {album.artist_name || 'Unknown Artist'}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center gap-3">
-                    <button
-                      onClick={handleLinkSongs}
-                      disabled={linkBusy || !selectedAlbumId || selectedSongIds.length === 0}
-                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      Link selected
-                    </button>
-                    <span className="text-sm text-gray-400">
-                      Selected {selectedSongIds.length} · Unassigned {unlinkedTotal}
-                    </span>
-                  </div>
-                  {linkMessage && <p className="mt-3 text-sm text-emerald-300">{linkMessage}</p>}
-                  {linkError && <p className="mt-3 text-sm text-red-300">{linkError}</p>}
+                      <p className="text-sm text-gray-400 mt-2">
+                        Configure VGGish audio embedding parameters and recalculate embeddings for similarity search.
+                      </p>
 
-                  <div className="mt-4 overflow-x-auto">
-                    <table className="w-full text-left text-sm">
-                      <thead className="text-gray-400">
-                        <tr>
-                          <th className="py-2 pr-4">Select</th>
-                          <th className="py-2 pr-4">Title</th>
-                          <th className="py-2 pr-4">Artist</th>
-                          <th className="py-2 pr-4">Album</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {unlinkedSongs.length === 0 && (
-                          <tr>
-                            <td colSpan={4} className="py-6 text-gray-500">
-                              No unassigned songs found.
-                            </td>
-                          </tr>
-                        )}
-                        {unlinkedSongs.map((song) => {
-                          const checked = selectedSongIds.includes(song.sha_id);
-                          return (
-                            <tr key={song.sha_id} className="border-t border-gray-800">
-                              <td className="py-3 pr-4">
+                      {/* Device Info */}
+                      {vggishSettings?.devices && vggishSettings.devices.length > 0 && (
+                        <div className="mt-4 rounded-xl bg-gray-800/50 p-4">
+                          <p className="text-xs uppercase text-gray-500 mb-2">Available Devices</p>
+                          <div className="flex flex-wrap gap-2">
+                            {vggishSettings.devices.map((device, idx) => (
+                              <span
+                                key={idx}
+                                className={`px-3 py-1 rounded-lg text-xs font-medium ${
+                                  device.available
+                                    ? 'bg-green-900/50 text-green-300 border border-green-700/50'
+                                    : 'bg-gray-800 text-gray-500 border border-gray-700'
+                                }`}
+                              >
+                                {device.device_type.toUpperCase()}: {device.device_name}
+                                {device.available ? ' ✓' : ' ✗'}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Configuration Form */}
+                      <div className="mt-4 space-y-4">
+                        <details className="group">
+                          <summary className="cursor-pointer text-sm font-medium text-gray-300 hover:text-white">
+                            Audio Configuration
+                          </summary>
+                          <div className="mt-3 grid gap-4 md:grid-cols-3 pl-4">
+                            <label className="text-sm text-gray-300">
+                              Sample Rate (Hz)
+                              <input
+                                value={vggishForm.target_sample_rate}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, target_sample_rate: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="16000"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Frame Duration (sec)
+                              <input
+                                value={vggishForm.frame_sec}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, frame_sec: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.96"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Hop Duration (sec)
+                              <input
+                                value={vggishForm.hop_sec}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, hop_sec: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.48"
+                              />
+                            </label>
+                          </div>
+                        </details>
+
+                        <details className="group">
+                          <summary className="cursor-pointer text-sm font-medium text-gray-300 hover:text-white">
+                            Mel Spectrogram Settings
+                          </summary>
+                          <div className="mt-3 grid gap-4 md:grid-cols-3 pl-4">
+                            <label className="text-sm text-gray-300">
+                              STFT Window (sec)
+                              <input
+                                value={vggishForm.stft_window_sec}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, stft_window_sec: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.025"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              STFT Hop (sec)
+                              <input
+                                value={vggishForm.stft_hop_sec}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, stft_hop_sec: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.010"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Mel Bins
+                              <input
+                                value={vggishForm.num_mel_bins}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, num_mel_bins: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="64"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Min Frequency (Hz)
+                              <input
+                                value={vggishForm.mel_min_hz}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, mel_min_hz: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="125"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Max Frequency (Hz)
+                              <input
+                                value={vggishForm.mel_max_hz}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, mel_max_hz: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="7500"
+                              />
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              Log Offset
+                              <input
+                                value={vggishForm.log_offset}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, log_offset: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.01"
+                              />
+                            </label>
+                          </div>
+                        </details>
+
+                        <details className="group" open>
+                          <summary className="cursor-pointer text-sm font-medium text-gray-300 hover:text-white">
+                            Device & Processing Settings
+                          </summary>
+                          <div className="mt-3 grid gap-4 md:grid-cols-3 pl-4">
+                            <label className="text-sm text-gray-300">
+                              Device Preference
+                              <select
+                                value={vggishForm.device_preference}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, device_preference: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                              >
+                                <option value="auto">Auto (best available)</option>
+                                <option value="cpu">CPU</option>
+                                <option value="gpu">GPU (NVIDIA)</option>
+                                <option value="metal">Metal (Apple Silicon)</option>
+                              </select>
+                            </label>
+                            <label className="text-sm text-gray-300">
+                              GPU Memory Fraction
+                              <input
+                                value={vggishForm.gpu_memory_fraction}
+                                onChange={(e) =>
+                                  setVggishForm((prev) => ({ ...prev, gpu_memory_fraction: e.target.value }))
+                                }
+                                className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                                placeholder="0.8"
+                              />
+                            </label>
+                            <div className="flex flex-col gap-3 pt-6">
+                              <label className="inline-flex items-center gap-2 text-sm text-gray-300">
                                 <input
                                   type="checkbox"
-                                  checked={checked}
-                                  onChange={() => toggleSongSelection(song.sha_id)}
+                                  checked={vggishForm.gpu_allow_growth}
+                                  onChange={(e) =>
+                                    setVggishForm((prev) => ({ ...prev, gpu_allow_growth: e.target.checked }))
+                                  }
                                   className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
                                 />
-                              </td>
-                              <td className="py-3 pr-4 text-white">{song.title}</td>
-                              <td className="py-3 pr-4 text-gray-300">
-                                {song.artist || 'Unknown'}
-                              </td>
-                              <td className="py-3 pr-4 text-gray-400">
-                                {song.album || 'Unknown'}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
+                                Allow GPU Memory Growth
+                              </label>
+                              <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+                                <input
+                                  type="checkbox"
+                                  checked={vggishForm.use_postprocess}
+                                  onChange={(e) =>
+                                    setVggishForm((prev) => ({ ...prev, use_postprocess: e.target.checked }))
+                                  }
+                                  className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                                />
+                                PCA Postprocessing
+                              </label>
+                            </div>
+                          </div>
+                        </details>
+                      </div>
+
+                      <div className="mt-4 flex justify-end">
+                        <button
+                          onClick={handleSaveVggishConfig}
+                          disabled={vggishBusy}
+                          className="inline-flex items-center gap-2 rounded-full bg-indigo-600 px-5 py-2 text-sm font-semibold text-white hover:bg-indigo-500 disabled:opacity-50"
+                        >
+                          {vggishBusy ? 'Saving...' : 'Save Configuration'}
+                        </button>
+                      </div>
+
+                      {/* Recalculate Embeddings Section */}
+                      <div className="mt-6 pt-6 border-t border-gray-800">
+                        <h3 className="text-lg font-semibold text-white mb-2">Recalculate Embeddings</h3>
+                        <p className="text-sm text-gray-400 mb-4">
+                          Generate new embeddings for songs missing them, or force recalculate all embeddings with current settings.
+                        </p>
+
+                        <div className="grid gap-4 md:grid-cols-2 mb-4">
+                          <label className="text-sm text-gray-300">
+                            Limit (songs)
+                            <input
+                              value={vggishRecalcForm.limit}
+                              onChange={(e) =>
+                                setVggishRecalcForm((prev) => ({ ...prev, limit: e.target.value }))
+                              }
+                              className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-2 text-sm text-white"
+                              placeholder="Leave empty for all"
+                            />
+                          </label>
+                          <div className="flex items-end pb-2">
+                            <label className="inline-flex items-center gap-2 text-sm text-gray-300">
+                              <input
+                                type="checkbox"
+                                checked={vggishRecalcForm.force}
+                                onChange={(e) =>
+                                  setVggishRecalcForm((prev) => ({ ...prev, force: e.target.checked }))
+                                }
+                                className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                              />
+                              Force recalculate (even if embedding exists)
+                            </label>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-4">
+                          <div className="text-sm text-gray-400">
+                            Status:{' '}
+                            <span className="text-white font-semibold">
+                              {embeddingInProgress || vggishSettings?.embedding_task?.running ? 'Running' : 'Idle'}
+                            </span>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-3">
+                            {(embeddingInProgress || vggishSettings?.embedding_task?.running) && (
+                              <button
+                                onClick={handleStopEmbeddingRecalc}
+                                className="inline-flex items-center gap-2 rounded-full border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/10"
+                              >
+                                Stop
+                              </button>
+                            )}
+                            <button
+                              onClick={handleRecalculateEmbeddings}
+                              disabled={embeddingInProgress || vggishSettings?.embedding_task?.running}
+                              className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                            >
+                              {embeddingInProgress ? 'Processing...' : 'Recalculate'}
+                            </button>
+                          </div>
+                        </div>
+
+                        {/* Current Status */}
+                        {(embeddingInProgress || currentEmbeddingStatus) && (
+                          <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300">
+                            <p className="text-xs uppercase text-gray-500 mb-2">Current status</p>
+                            <p className="text-white">
+                              {currentEmbeddingStatus || 'Waiting for updates...'}
+                            </p>
+                          </div>
+                        )}
+
+                        {/* Progress */}
+                        {embeddingProgress && (
+                          <div className="mt-4 rounded-xl bg-gray-950/50 border border-gray-700 p-4">
+                            <p className="text-xs uppercase text-gray-500 mb-3">Progress</p>
+                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                              <div>
+                                <div className="text-2xl font-bold text-blue-400">{embeddingProgress.processed}</div>
+                                <div className="text-xs text-gray-400">Processed</div>
+                              </div>
+                              <div>
+                                <div className="text-2xl font-bold text-green-400">{embeddingProgress.recalculated}</div>
+                                <div className="text-xs text-gray-400">Generated</div>
+                              </div>
+                              <div>
+                                <div className="text-2xl font-bold text-yellow-400">{embeddingProgress.skipped}</div>
+                                <div className="text-xs text-gray-400">Skipped</div>
+                              </div>
+                              <div>
+                                <div className="text-2xl font-bold text-red-400">{embeddingProgress.failed}</div>
+                                <div className="text-xs text-gray-400">Failed</div>
+                              </div>
+                              <div>
+                                <div className="text-2xl font-bold text-gray-400">{embeddingProgress.total}</div>
+                                <div className="text-xs text-gray-400">Total</div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Live Status Log */}
+                        {liveEmbeddingStatus.length > 0 && (
+                          <div
+                            ref={liveEmbeddingStatusRef}
+                            className="mt-4 rounded-xl bg-gray-950/50 border border-gray-700 p-4 max-h-64 overflow-y-auto"
+                          >
+                            <p className="text-xs uppercase text-gray-500 mb-2">Live Status</p>
+                            <div className="space-y-1 font-mono text-xs text-gray-300">
+                              {liveEmbeddingStatus.map((status, idx) => (
+                                <div key={idx} className="whitespace-pre-wrap">
+                                  {status}
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Last Run Info */}
+                        {vggishSettings?.embedding_task?.last_result && (
+                          <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
+                            <div>
+                              <p className="text-xs uppercase text-gray-500">Last run</p>
+                              <p className="text-white">
+                                {vggishSettings.embedding_task.finished_at
+                                  ? new Date(vggishSettings.embedding_task.finished_at).toLocaleString()
+                                  : '--'}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs uppercase text-gray-500">Last result</p>
+                              <p className="text-white">
+                                Generated {vggishSettings.embedding_task.last_result.recalculated} ·
+                                Skipped {vggishSettings.embedding_task.last_result.skipped} ·
+                                Failed {vggishSettings.embedding_task.last_result.failed}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+
+                        {vggishSettings?.embedding_task?.last_error && (
+                          <p className="mt-3 text-sm text-red-300">
+                            {vggishSettings.embedding_task.last_error}
+                          </p>
+                        )}
+                      </div>
                     </>
                   )}
                 </section>

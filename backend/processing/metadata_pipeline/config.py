@@ -7,7 +7,9 @@ MUSICBRAINZ_APP_VERSION = "0.1.0"
 MUSICBRAINZ_CONTACT_EMAIL = "sycrostudios@gmail.com"
 
 MUSICBRAINZ_RATE_LIMIT_SECONDS = 1.0
-MUSICBRAINZ_MIN_SCORE = 90
+# Lowered from 90 to allow more candidates through - our improved scoring algorithm
+# now properly weights artist matches to filter out wrong matches
+MUSICBRAINZ_MIN_SCORE = 75
 MUSICBRAINZ_MAX_TAGS = 5
 MUSICBRAINZ_REQUEST_RETRIES = int(os.environ.get("SONGBASE_MUSICBRAINZ_RETRIES", "2"))
 MUSICBRAINZ_RETRY_BACKOFF_SEC = float(

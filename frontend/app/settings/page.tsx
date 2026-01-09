@@ -73,6 +73,7 @@ export default function SettingsPage() {
   const [resetEmbeddings, setResetEmbeddings] = useState(false);
   const [resetHashedMusic, setResetHashedMusic] = useState(false);
   const [resetArtistAlbum, setResetArtistAlbum] = useState(false);
+  const [resetSongMetadata, setResetSongMetadata] = useState(false);
 
   const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => {
     const response = await fetch(url, {
@@ -167,7 +168,7 @@ export default function SettingsPage() {
   const handleReset = async () => {
     setStatusMessage(null);
     setErrorMessage(null);
-    if (!resetEmbeddings && !resetHashedMusic && !resetArtistAlbum) {
+    if (!resetEmbeddings && !resetHashedMusic && !resetArtistAlbum && !resetSongMetadata) {
       setErrorMessage('Select at least one reset option.');
       return;
     }
@@ -186,6 +187,7 @@ export default function SettingsPage() {
           clear_embeddings: resetEmbeddings,
           clear_hashed_music: resetHashedMusic,
           clear_artist_album: resetArtistAlbum,
+          clear_song_metadata: resetSongMetadata,
           confirm,
         }),
       });
@@ -193,8 +195,10 @@ export default function SettingsPage() {
       if (resetHashedMusic) {
         parts.push(`songs removed: ${result.songs_deleted}`);
         parts.push(`cache entries removed: ${result.song_cache_entries_deleted}`);
+      } else if (resetSongMetadata) {
+        parts.push(`songs removed: ${result.songs_deleted}`);
       }
-      if (resetEmbeddings || resetHashedMusic) {
+      if (resetEmbeddings || resetHashedMusic || resetSongMetadata) {
         parts.push(`embeddings removed: ${result.embeddings_deleted}`);
         parts.push(`embedding files removed: ${result.embedding_files_deleted}`);
       }
@@ -210,6 +214,7 @@ export default function SettingsPage() {
       setResetEmbeddings(false);
       setResetHashedMusic(false);
       setResetArtistAlbum(false);
+      setResetSongMetadata(false);
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Reset failed.');
     } finally {
@@ -451,6 +456,20 @@ export default function SettingsPage() {
                     <span className="font-semibold">Clear hashed music</span>
                     <span className="block text-xs text-red-200/70">
                       Deletes `.song_cache` files and removes song metadata (this also clears embeddings).
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    checked={resetSongMetadata}
+                    onChange={(e) => setResetSongMetadata(e.target.checked)}
+                    className="mt-1 h-4 w-4 rounded border-red-500/40 bg-red-500/10 text-red-200 focus:ring-0"
+                  />
+                  <span>
+                    <span className="font-semibold">Clear song metadata</span>
+                    <span className="block text-xs text-red-200/70">
+                      Removes all song metadata from the database but keeps the hashed music files (also clears embeddings).
                     </span>
                   </span>
                 </label>

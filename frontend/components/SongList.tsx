@@ -8,6 +8,7 @@ import { RadioIcon, HeartIcon as HeartOutlineIcon } from '@heroicons/react/24/ou
 import { Song } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
 import { useUserPreferences } from '@/contexts/UserPreferencesContext';
+import ArtistLinks from '@/components/ArtistLinks';
 
 interface SongListProps {
   songs: Song[];
@@ -134,17 +135,12 @@ export default function SongList({
 
               {/* Artist */}
               <div className="flex items-center text-gray-400 truncate">
-                {song.artistId ? (
-                  <Link
-                    href={`/artist/${song.artistId}`}
-                    onClick={(e) => e.stopPropagation()}
-                    className="hover:text-white hover:underline truncate"
-                  >
-                    {song.artist}
-                  </Link>
-                ) : (
-                  <span className="truncate">{song.artist}</span>
-                )}
+                <ArtistLinks
+                  artists={song.artists}
+                  fallbackArtist={song.artist}
+                  fallbackArtistId={song.artistId}
+                  className="truncate"
+                />
               </div>
 
               {/* Like Button */}

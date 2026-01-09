@@ -38,3 +38,18 @@ VGGISH_INPUT_TENSOR_NAME = "vggish/input_features:0"
 VGGISH_OUTPUT_TENSOR_NAME = "vggish/embedding:0"
 
 EMBEDDING_EXTENSION = ".npz"
+
+# GPU/Device configuration
+# Device preference: "auto", "cpu", "gpu", "metal"
+# - "auto": Automatically select best available device (Metal > GPU > CPU)
+# - "cpu": Force CPU usage
+# - "gpu": Use NVIDIA GPU if available
+# - "metal": Use Apple Metal GPU if available
+VGGISH_DEVICE_PREFERENCE = "auto"
+
+# GPU memory management (only applies to GPU/Metal devices)
+# Fraction of GPU memory to allocate (0.0 to 1.0)
+VGGISH_GPU_MEMORY_FRACTION = 0.8
+
+# Allow GPU memory to grow dynamically as needed
+VGGISH_GPU_ALLOW_GROWTH = True

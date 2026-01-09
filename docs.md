@@ -33,7 +33,8 @@ songbase/
 │   │   │   ├── 002_add_metadata_verification.sql - Adds verification metadata columns
 │   │   │   ├── 003_add_download_queue.sql - Adds download queue table
 │   │   │   ├── 004_update_download_queue.sql - Adds queue tracking fields
-│   │   │   └── 005_add_album_metadata.sql - Adds album metadata + track list tables
+│   │   │   ├── 005_add_album_metadata.sql - Adds album metadata + track list tables
+│   │   │   └── 006_add_artist_fuzzy_matching.sql - Adds pg_trgm, artist variants, song counts
 │   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
@@ -81,6 +82,7 @@ songbase/
 │       ├── metadata_pipeline/
 │       │   ├── __init__.py       - Package entry point for verification helpers
 │       │   ├── album_pipeline.py  - Album metadata + track list ingestion
+│       │   ├── artist_lookup.py   - Hybrid artist lookup (exact + trigram + popular filter)
 │       │   ├── cli.py            - CLI for MusicBrainz verification
 │       │   ├── config.py         - Configuration for MusicBrainz, Spotify, Wikidata APIs
 │       │   ├── filename_parser.py - Intelligent filename parsing (Artist - Title extraction)
@@ -149,14 +151,14 @@ songbase/
 
 ### frontend/app/library/page.tsx
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
-- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/acquisition/backends`
-- **Notes**: Sources already queued are hidden from the sources list and shown only in the pipeline queue table.
+- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/acquisition/backends`, `/api/settings/vggish`
 - **Notes**: The pipeline queue table is paged (10/25/50/100).
 - **Notes**: The pipeline run panel shows live config, last event, and cache paths while running.
 - **Notes**: "Run until queue is empty" checkbox automatically processes batches until all pending and processing items are stored or failed.
 - **Notes**: Acquisition backend panel allows configuring yt-dlp authentication with browser cookies for accessing age-restricted or member-only content.
 - **Notes**: Manage Music includes local file import (audio/video) via `/api/library/import`.
 - **Notes**: Database tab includes a song metadata editor with a right-side details panel, edit flow, and per-song metadata verification buttons.
+- **Notes**: Database tab includes a VGGish Embeddings panel for configuring embedding parameters (sample rate, mel spectrogram settings, device preference) and recalculating embeddings with live progress.
 
 ### frontend/app/settings/page.tsx
 - **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
@@ -272,9 +274,6 @@ try {
   - `POST /api/library/import`: Import local audio/video files into the queue (multipart form upload)
   - `GET /api/library/queue`: View download queue status
   - `POST /api/library/queue/clear`: Clear the download queue
-  - `GET /api/library/sources`: List entries in `sources.jsonl`
-  - `POST /api/library/seed-sources`: Insert `sources.jsonl` into the queue
-  - `POST /api/library/sources/clear`: Clear `sources.jsonl` entries
   - `GET /api/library/stats`: Database + queue metrics
   - `POST /api/library/pipeline/run`: Start a processing pipeline run
   - `POST /api/library/pipeline/stop`: Request the active processing pipeline to stop after the current stage
@@ -331,11 +330,15 @@ try {
   ```
 
 ### backend/api/routes/settings.py
-- **Purpose**: Persist UI settings for pipeline defaults and storage paths
+- **Purpose**: Persist UI settings for pipeline defaults, storage paths, and VGGish configuration
 - **Endpoints**:
   - `GET /api/settings`: Fetch stored settings
   - `PUT /api/settings`: Update settings (pipeline + paths)
   - `POST /api/settings/reset`: Clear embeddings, hashed music, and/or artist/album data (requires `confirm: "CLEAR"`)
+  - `GET /api/settings/vggish`: Fetch VGGish configuration, available devices, and embedding task status
+  - `PUT /api/settings/vggish`: Update VGGish configuration parameters
+  - `GET /api/settings/vggish/recalculate-stream`: Recalculate embeddings (SSE stream with live progress)
+  - `POST /api/settings/vggish/recalculate/stop`: Stop an active embedding recalculation
 - **Usage**:
   ```bash
   curl http://localhost:8000/api/settings
@@ -343,11 +346,26 @@ try {
   curl -X PUT http://localhost:8000/api/settings \
     -H "Content-Type: application/json" \
     -d '{"pipeline":{"process_limit":8},"paths":{"preprocessed_cache_dir":"./preprocessed_cache"}}'
+
+  # Get VGGish configuration and detected devices
+  curl http://localhost:8000/api/settings/vggish
+
+  # Update VGGish configuration
+  curl -X PUT http://localhost:8000/api/settings/vggish \
+    -H "Content-Type: application/json" \
+    -d '{"device_preference":"auto","gpu_memory_fraction":0.8,"use_postprocess":true}'
+
+  # Recalculate embeddings (SSE stream)
+  curl -N "http://localhost:8000/api/settings/vggish/recalculate-stream?limit=10&force=false"
+
+  # Stop embedding recalculation
+  curl -X POST http://localhost:8000/api/settings/vggish/recalculate/stop
   ```
 
 ### backend/app_settings.py
 - **Purpose**: Load/store UI settings under `.metadata/settings.json`
 - **Used By**: `/api/settings`, pipeline runner (default batch sizes and paths)
+- **VGGish Settings**: Includes configuration for VGGish audio embeddings (sample rate, mel spectrogram parameters, device preference, GPU settings)
 
 ## Backend DB (Postgres + pgvector)
 
@@ -1001,19 +1019,39 @@ Starting from the latest update, the metadata verification pipeline (`backend/pr
    - Returns confidence-scored interpretations
    - Handles common artist-title patterns
    - Treats placeholder artists (e.g., "Unknown Artist") and numeric prefixes as weak signals, keeping title-only fallbacks
+   - **YouTube filename preprocessing**: Normalizes common YouTube download patterns like `Artist_ - _Title` and `Artist__Title`
+   - **Callback-based artist lookup**: Accepts optional `lookup_fn` callback for scalable database-backed matching
+   - **Generalized normalization**: Uses `_normalize_for_comparison()` and `_generate_name_variants()` to handle variations like "edsheeran" → "Ed Sheeran" without hardcoded mappings
 
-2. **`backend/processing/metadata_pipeline/multi_source_resolver.py`**:
+2. **`backend/processing/metadata_pipeline/artist_lookup.py`** (NEW):
+   - Hybrid artist name lookup combining three strategies for scalability:
+     1. **Exact match** via normalized variants table (O(1) lookup using pre-computed variants)
+     2. **Trigram fuzzy match** via `pg_trgm` extension (uses GIN index, scales to millions of artists)
+     3. **Popular artists filter** (only searches artists with 2+ songs for faster trigram matching)
+   - Provides `create_artist_lookup_fn()` to create a callback for the parser
+   - Memory-efficient: No need to load all artists into memory
+
+3. **`backend/processing/metadata_pipeline/musicbrainz_client.py`**:
+   - MusicBrainz API wrapper with retry logic and rate limiting
+   - **Enhanced title normalization**: Aggressively strips video qualifiers (Official Video, Visualizer, HD, 4K, etc.), year patterns, and version indicators for better matching
+   - **Enhanced artist normalization**: Removes "The " prefix, featuring artists, and special characters for fuzzy matching
+   - **Artist-aware scoring**: When artist is provided, heavily weights artist match in scoring (45% vs 25% for title) to prevent wrong artist matches
+   - **No fallback to no-artist search**: When artist is provided, does NOT fall back to searching without artist to prevent mismatches like "Ed Sheeran - Bad Habits" → "Thin Lizzy - Bad Habits"
+   - **Configurable thresholds**: Min score (75), title similarity (0.72 with artist, 0.85 without), artist similarity (0.6)
+
+4. **`backend/processing/metadata_pipeline/multi_source_resolver.py`**:
    - Orchestrates multi-source metadata resolution
    - Implements fallback chain across all sources
    - Validates parsed metadata against match results
    - Tries title/artist variants (underscore cleanup, MV/Visualizer/Monstercat stripping) and merges stop-word artists into title-only searches when needed
 
-3. **`backend/processing/metadata_pipeline/pipeline.py`**:
+5. **`backend/processing/metadata_pipeline/pipeline.py`**:
    - Main verification entry point
+   - Creates database-backed artist lookup callback for efficient parsing
    - Integrates image fetching after successful verification
    - Returns comprehensive results including image statistics
 
-4. **`backend/api/routes/processing.py`**:
+6. **`backend/api/routes/processing.py`**:
    - SSE endpoint for real-time status streaming
    - Formats status messages as JSON
    - Includes image statistics in completion message

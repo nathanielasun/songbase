@@ -2,10 +2,19 @@
 
 from __future__ import annotations
 
+import difflib
 import re
 import unicodedata
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Callable, Iterator
+
+
+# Type alias for artist lookup callback function
+# Takes artist name, returns (canonical_name, similarity) or None
+ArtistLookupFn = Callable[[str], tuple[str, float] | None]
+
+# Minimum similarity threshold for fuzzy artist matching (in-memory fallback)
+ARTIST_MATCH_THRESHOLD = 0.75
 
 # Common qualifiers to progressively strip from titles
 # Ordered from most specific to least specific
@@ -68,6 +77,219 @@ PLACEHOLDER_ARTISTS = {
     "n/a",
     "na",
 }
+
+
+def _normalize_for_comparison(name: str | None) -> str:
+    """
+    Normalize a name for fuzzy comparison.
+    Strips special characters, normalizes whitespace, lowercases.
+    """
+    if not name:
+        return ""
+    # Normalize unicode
+    normalized = unicodedata.normalize("NFKD", name)
+    # Remove special characters but keep alphanumeric and spaces
+    cleaned = re.sub(r"[^\w\s]", "", normalized.lower())
+    # Normalize whitespace
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned
+
+
+def _generate_name_variants(name: str) -> list[str]:
+    """
+    Generate normalized variants of a name for matching.
+    Returns list of variants to try for fuzzy matching.
+    """
+    variants = []
+
+    # Basic normalized form
+    base = _normalize_for_comparison(name)
+    if base:
+        variants.append(base)
+
+    # Without spaces (catches "edsheeran" -> "ed sheeran")
+    no_spaces = base.replace(" ", "")
+    if no_spaces and no_spaces != base:
+        variants.append(no_spaces)
+
+    # With "the " prefix removed
+    if base.startswith("the "):
+        without_the = base[4:]
+        if without_the:
+            variants.append(without_the)
+
+    # With "the " prefix added
+    with_the = f"the {base}"
+    variants.append(with_the)
+
+    return variants
+
+
+def fuzzy_match_artist(
+    parsed_name: str,
+    known_artists: list[str] | None = None,
+    threshold: float = ARTIST_MATCH_THRESHOLD,
+    lookup_fn: ArtistLookupFn | None = None,
+) -> tuple[str, float] | None:
+    """
+    Find the best fuzzy match for a parsed artist name.
+
+    Supports two modes:
+    1. Callback mode (preferred): Uses lookup_fn for database-backed matching
+    2. List mode (fallback): Uses in-memory fuzzy matching against known_artists
+
+    Args:
+        parsed_name: The artist name extracted from filename
+        known_artists: List of canonical artist names (for in-memory matching)
+        threshold: Minimum similarity ratio (0.0 to 1.0) to consider a match
+        lookup_fn: Callback function for database-backed lookup
+
+    Returns:
+        Tuple of (canonical_name, similarity_score) or None if no match found
+    """
+    if not parsed_name:
+        return None
+
+    # Strategy 1: Use callback if provided (preferred, scalable)
+    if lookup_fn is not None:
+        result = lookup_fn(parsed_name)
+        if result and result[1] >= threshold:
+            return result
+        # Also try normalized variants with callback
+        for variant in _generate_name_variants(parsed_name):
+            if variant != parsed_name:
+                result = lookup_fn(variant)
+                if result and result[1] >= threshold:
+                    return result
+        return None
+
+    # Strategy 2: In-memory fuzzy matching (fallback for small lists)
+    if not known_artists:
+        return None
+
+    parsed_variants = _generate_name_variants(parsed_name)
+
+    best_match = None
+    best_score = 0.0
+
+    for known_artist in known_artists:
+        known_variants = _generate_name_variants(known_artist)
+
+        for parsed_var in parsed_variants:
+            for known_var in known_variants:
+                # Use SequenceMatcher for fuzzy comparison
+                score = difflib.SequenceMatcher(None, parsed_var, known_var).ratio()
+
+                if score > best_score:
+                    best_score = score
+                    best_match = known_artist
+
+                # Early exit on exact match
+                if score == 1.0:
+                    return (known_artist, 1.0)
+
+    if best_score >= threshold:
+        return (best_match, best_score)
+
+    return None
+
+
+def extract_artist_from_text(
+    text: str,
+    known_artists: list[str] | None = None,
+    threshold: float = ARTIST_MATCH_THRESHOLD,
+    lookup_fn: ArtistLookupFn | None = None,
+) -> tuple[str, str, float] | None:
+    """
+    Try to extract a known artist from the beginning of text using fuzzy matching.
+
+    Args:
+        text: The text to search (typically filename without extension)
+        known_artists: Optional list of canonical artist names (in-memory matching)
+        threshold: Minimum similarity for a match
+        lookup_fn: Optional callback for database-backed lookup (preferred)
+
+    Returns:
+        Tuple of (matched_artist, remaining_text, confidence) or None
+    """
+    if not known_artists and not lookup_fn:
+        return None
+
+    # Try progressively longer prefixes (up to 5 words)
+    words = re.split(r"[\s_\-]+", text)
+
+    best_result = None
+    best_score = 0.0
+
+    for i in range(min(5, len(words)), 0, -1):
+        prefix = " ".join(words[:i])
+        remaining = " ".join(words[i:])
+
+        # Skip if remaining text is empty or too short
+        if not remaining or len(remaining.strip()) < 2:
+            continue
+
+        match_result = fuzzy_match_artist(
+            prefix,
+            known_artists=known_artists,
+            threshold=threshold,
+            lookup_fn=lookup_fn,
+        )
+        if match_result:
+            matched_artist, score = match_result
+            # Prefer longer matches with good scores
+            adjusted_score = score * (1 + 0.1 * i)  # Slight bonus for longer matches
+            if adjusted_score > best_score:
+                best_score = adjusted_score
+                # Clean separator from remaining
+                remaining = re.sub(r"^[\s_\-]+", "", remaining)
+                best_result = (matched_artist, remaining, score)
+
+    return best_result
+
+
+def preprocess_youtube_filename(filename: str) -> str:
+    """
+    Preprocess YouTube-style filenames to normalize common patterns.
+
+    Examples:
+        "Artist_ - _Title" -> "Artist - Title"
+        "Artist__Title" -> "Artist - Title"
+        "Artist_-_Title" -> "Artist - Title"
+    """
+    # Normalize unicode
+    text = unicodedata.normalize("NFKD", filename)
+
+    # Remove file extensions
+    text = re.sub(r"\.(mp3|flac|wav|m4a|aac|ogg|opus|wma|mp4|webm|mkv)$", "", text, flags=re.IGNORECASE)
+
+    # Common YouTube filename patterns:
+    # "Artist_ - _Title" -> "Artist - Title"
+    text = re.sub(r"_\s*-\s*_", " - ", text)
+
+    # "Artist_-_Title" -> "Artist - Title"
+    text = re.sub(r"_-_", " - ", text)
+
+    # Handle "Artist__Title" (double underscore) as separator
+    text = re.sub(r"__+", " - ", text)
+
+    # Replace remaining underscores with spaces (but preserve dashes)
+    # Only if not part of an artist-title separator pattern
+    if " - " not in text and " – " not in text and " — " not in text:
+        # Check if there's an underscore pattern that looks like Artist_Title
+        if "_" in text and "-" not in text:
+            # Keep underscores for now, will be handled by underscore pattern
+            pass
+        else:
+            text = text.replace("_", " ")
+    else:
+        # Already have a dash separator, replace remaining underscores
+        text = text.replace("_", " ")
+
+    # Clean up multiple spaces
+    text = re.sub(r"\s+", " ", text).strip()
+
+    return text
 
 
 def is_placeholder_artist(name: str | None) -> bool:
@@ -493,7 +715,68 @@ def _extract_swap_pattern(filename: str) -> Iterator[ParsedMetadata]:
             yield ParsedMetadata(artist=artist, title=title, confidence=0.45)
 
 
-def parse_filename(filename: str) -> list[ParsedMetadata]:
+def _extract_known_artist_pattern(
+    filename: str,
+    known_artists: list[str] | None = None,
+    lookup_fn: ArtistLookupFn | None = None,
+) -> Iterator[ParsedMetadata]:
+    """
+    Extract using fuzzy matching against known artists.
+    This has highest priority when a match is found.
+
+    Args:
+        filename: The preprocessed filename
+        known_artists: Optional list of canonical artist names (in-memory matching)
+        lookup_fn: Optional callback for database-backed lookup (preferred)
+    """
+    if not known_artists and not lookup_fn:
+        return
+
+    # Preprocess the filename
+    preprocessed = preprocess_youtube_filename(filename)
+
+    # Try to find a known artist at the start using fuzzy matching
+    result = extract_artist_from_text(
+        preprocessed,
+        known_artists=known_artists,
+        lookup_fn=lookup_fn,
+    )
+    if result:
+        artist, title, score = result
+        # Clean the title
+        title = _clean_text(title)
+        if title:
+            # Confidence based on match score
+            confidence = 0.85 + (score - ARTIST_MATCH_THRESHOLD) * 0.4
+            confidence = min(0.98, max(0.85, confidence))
+            yield ParsedMetadata(artist=artist, title=title, confidence=confidence)
+
+    # Also check if there's a dash separator and the artist part matches
+    if " - " in preprocessed:
+        parts = preprocessed.split(" - ", 1)
+        artist_part = parts[0].strip()
+        title_part = parts[1].strip() if len(parts) > 1 else ""
+
+        # Check if artist part matches a known artist
+        match_result = fuzzy_match_artist(
+            artist_part,
+            known_artists=known_artists,
+            lookup_fn=lookup_fn,
+        )
+        if match_result and title_part:
+            matched_artist, score = match_result
+            title = _clean_text(title_part)
+            if title:
+                confidence = 0.85 + (score - ARTIST_MATCH_THRESHOLD) * 0.4
+                confidence = min(0.98, max(0.85, confidence))
+                yield ParsedMetadata(artist=matched_artist, title=title, confidence=confidence)
+
+
+def parse_filename(
+    filename: str,
+    known_artists: list[str] | None = None,
+    lookup_fn: ArtistLookupFn | None = None,
+) -> list[ParsedMetadata]:
     """
     Parse a filename and return possible metadata extractions.
 
@@ -502,6 +785,10 @@ def parse_filename(filename: str) -> list[ParsedMetadata]:
 
     Args:
         filename: The song filename (with or without extension)
+        known_artists: Optional list of canonical artist names (in-memory matching).
+            Use for small lists only. For large databases, use lookup_fn instead.
+        lookup_fn: Optional callback for database-backed artist lookup (preferred).
+            Should take artist name and return (canonical_name, similarity) or None.
 
     Returns:
         List of ParsedMetadata, sorted by confidence descending
@@ -512,27 +799,72 @@ def parse_filename(filename: str) -> list[ParsedMetadata]:
 
         >>> parse_filename("ALLEYCVT - Throw it down.mp3")
         [ParsedMetadata(artist="ALLEYCVT", title="Throw it down", confidence=0.9)]
+
+        >>> # With database-backed lookup
+        >>> from backend.processing.metadata_pipeline.artist_lookup import create_artist_lookup_fn
+        >>> lookup = create_artist_lookup_fn()
+        >>> parse_filename("ed sheeran bad habits", lookup_fn=lookup)
+        [ParsedMetadata(artist="Ed Sheeran", title="bad habits", confidence=0.95)]
     """
     results: list[ParsedMetadata] = []
 
+    # Preprocess the filename for YouTube-style patterns
+    preprocessed = preprocess_youtube_filename(filename)
+
+    # Try known artist extraction first (highest priority) if lookup available
+    if known_artists or lookup_fn:
+        results.extend(_extract_known_artist_pattern(
+            preprocessed,
+            known_artists=known_artists,
+            lookup_fn=lookup_fn,
+        ))
+
     # Try each extraction pattern (ordered by reliability)
-    results.extend(_extract_dash_pattern(filename))
-    results.extend(_extract_swap_pattern(filename))
-    results.extend(_extract_track_number_pattern(filename))
-    results.extend(_extract_underscore_pattern(filename))
-    results.extend(_extract_parentheses_pattern(filename))
-    results.extend(_extract_camelcase_pattern(filename))
-    results.extend(_extract_first_word_pattern(filename))
-    results.extend(_extract_no_artist_pattern(filename))
+    results.extend(_extract_dash_pattern(preprocessed))
+    results.extend(_extract_swap_pattern(preprocessed))
+    results.extend(_extract_track_number_pattern(preprocessed))
+    results.extend(_extract_underscore_pattern(preprocessed))
+    results.extend(_extract_parentheses_pattern(preprocessed))
+    results.extend(_extract_camelcase_pattern(preprocessed))
+    results.extend(_extract_first_word_pattern(preprocessed))
+    results.extend(_extract_no_artist_pattern(preprocessed))
+
+    # Post-process: try to match extracted artists against known artists
+    normalized_results = []
+    for result in results:
+        if result.artist and (known_artists or lookup_fn):
+            # Try fuzzy matching against known artists
+            match_result = fuzzy_match_artist(
+                result.artist,
+                known_artists=known_artists,
+                lookup_fn=lookup_fn,
+            )
+            if match_result:
+                canonical, score = match_result
+                # Boost confidence based on match quality
+                boost = (score - ARTIST_MATCH_THRESHOLD) * 0.2
+                new_confidence = min(result.confidence + boost, 0.98)
+                normalized_results.append(ParsedMetadata(
+                    artist=canonical,
+                    title=result.title,
+                    confidence=new_confidence,
+                ))
+            else:
+                normalized_results.append(result)
+        else:
+            normalized_results.append(result)
 
     # Sort by confidence descending
-    results.sort(key=lambda x: x.confidence, reverse=True)
+    normalized_results.sort(key=lambda x: x.confidence, reverse=True)
 
     # Deduplicate while preserving order
     seen = set()
     unique_results = []
-    for result in results:
-        key = (result.artist, result.title)
+    for result in normalized_results:
+        # Normalize key for deduplication
+        artist_key = _normalize_for_comparison(result.artist) if result.artist else None
+        title_key = _normalize_for_comparison(result.title)
+        key = (artist_key, title_key)
         if key not in seen:
             seen.add(key)
             unique_results.append(result)

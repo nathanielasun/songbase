@@ -7,6 +7,7 @@ from typing import Callable, Iterable
 from backend.db.connection import get_connection
 
 from . import config
+from .artist_lookup import create_artist_lookup_fn
 from .id3_extractor import extract_genres_for_song
 from .multi_source_resolver import MetadataMatch, resolve_with_parsing
 from .musicbrainz_client import configure_client
@@ -382,6 +383,11 @@ def _verify_songs(
             artist_images_fetched=0,
         )
 
+    # Create artist lookup callback for database-backed fuzzy matching
+    # This is more memory-efficient than loading all artists into memory
+    artist_lookup_fn = create_artist_lookup_fn()
+    log("Initialized database-backed artist lookup for filename parsing")
+
     log(f"\nStarting metadata verification for {total} song(s)...\n")
 
     with get_connection() as conn:
@@ -420,6 +426,7 @@ def _verify_songs(
                         min_score=min_score,
                         rate_limit_seconds=rate_limit_seconds,
                         status_callback=song_status,
+                        artist_lookup_fn=artist_lookup_fn,
                     )
                 except Exception as e:  # noqa: BLE001
                     log(f"  ✗ Error: {str(e)}")

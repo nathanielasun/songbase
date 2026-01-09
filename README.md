@@ -25,6 +25,29 @@ sudo apt-get install ffmpeg
 # Download from https://ffmpeg.org/download.html
 ```
 
+### GPU Acceleration (Optional)
+
+VGGish audio embeddings can leverage GPU/Metal acceleration for faster processing:
+
+**For Apple Silicon Macs (M1/M2/M3):**
+```bash
+pip install tensorflow-metal
+```
+
+**For NVIDIA GPUs (Linux/Windows):**
+- Ensure CUDA Toolkit and cuDNN are installed
+- TensorFlow will automatically detect and use NVIDIA GPUs
+
+**Test GPU Detection:**
+```bash
+python backend/processing/audio_pipeline/test_gpu_detection.py
+```
+
+See [GPU Acceleration Guide](backend/processing/audio_pipeline/GPU_ACCELERATION.md) for detailed configuration.
+
+**Configure via UI:**
+The VGGish embedding parameters (device preference, sample rate, mel spectrogram settings) can also be configured via the web UI at `/library` → Database tab → VGGish Embeddings panel. This panel also allows recalculating embeddings for songs with live progress tracking.
+
 ## Quick Start
 
 ### 1. Install Backend Dependencies

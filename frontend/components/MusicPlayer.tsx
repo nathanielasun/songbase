@@ -22,6 +22,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { Song, RepeatMode } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
+import ArtistLinks from '@/components/ArtistLinks';
 
 interface MusicPlayerProps {
   currentSong: Song | null;
@@ -330,16 +331,13 @@ export default function MusicPlayer({
           ) : (
             <p className="text-white text-sm font-semibold truncate">{currentSong.title}</p>
           )}
-          {currentSong.artistId ? (
-            <Link
-              href={`/artist/${currentSong.artistId}`}
-              className="text-gray-400 text-xs truncate block hover:text-white hover:underline"
-            >
-              {currentSong.artist}
-            </Link>
-          ) : (
-            <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
-          )}
+          <ArtistLinks
+            artists={currentSong.artists}
+            fallbackArtist={currentSong.artist}
+            fallbackArtistId={currentSong.artistId}
+            className="text-gray-400 text-xs truncate block"
+            linkClassName="hover:text-white hover:underline"
+          />
         </div>
         <div className="flex items-center gap-2">
           <button

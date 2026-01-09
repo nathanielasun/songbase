@@ -10,7 +10,9 @@ from . import config
 from . import spotify_client
 from .filename_parser import (
     STOP_WORDS,
+    ArtistLookupFn,
     _clean_text,
+    fuzzy_match_artist,
     generate_artist_variants,
     generate_title_variants,
     is_placeholder_artist,
@@ -237,6 +239,7 @@ def _try_musicbrainz(
     min_score: int | None = None,
     rate_limit_seconds: float | None = None,
     status_callback: StatusCallback | None = None,
+    artist_lookup_fn: ArtistLookupFn | None = None,
 ) -> MetadataMatch | None:
     """
     Resolve metadata with intelligent filename parsing and multi-source fallback.
@@ -246,12 +249,16 @@ def _try_musicbrainz(
     1. Try with existing (cleaned) metadata
     2. Parse filename to extract artist/title
     3. Try title-only search (including "Artist Title" merged)
+
+    Args:
+        artist_lookup_fn: Optional callback for database-backed artist lookup
+            during filename parsing. Preferred over in-memory matching.
     """
-    
+
     # Step 0: Clean inputs
     cleaned_title = _clean_text(title)
     cleaned_artist = _clean_text(artist) if artist else None
-    
+
     # If artist is just a stop word, treat as None/Unknown
     if cleaned_artist and cleaned_artist.lower() in STOP_WORDS:
         if status_callback:
@@ -260,7 +267,7 @@ def _try_musicbrainz(
         artists = None
 
     artist_list = artists or ([cleaned_artist] if cleaned_artist else [])
-    
+
     # If we cleaned the artist (e.g. AOA_ -> AOA), use the cleaned version
     if cleaned_artist and cleaned_artist != artist:
         artist_list = [cleaned_artist]
@@ -290,7 +297,7 @@ def _try_musicbrainz(
         if status_callback:
             status_callback(f"Parsing filename for additional metadata...")
 
-        parsed_options = parse_filename(title)
+        parsed_options = parse_filename(title, lookup_fn=artist_lookup_fn)
         best_match = None
         best_weighted_score = -1.0
 
@@ -407,6 +414,7 @@ def resolve_with_parsing(
     min_score: int | None = None,
     rate_limit_seconds: float | None = None,
     status_callback: StatusCallback | None = None,
+    artist_lookup_fn: ArtistLookupFn | None = None,
 ) -> MetadataMatch | None:
     """
     Resolve metadata with intelligent filename parsing and multi-source fallback.
@@ -416,13 +424,17 @@ def resolve_with_parsing(
     1. Try with existing (cleaned) metadata
     2. Parse filename to extract artist/title
     3. Try title-only search (including "Artist Title" merged)
+
+    Args:
+        artist_lookup_fn: Optional callback for database-backed artist lookup
+            during filename parsing. Preferred over in-memory matching.
     """
-    
+
     # Step 0: Clean inputs
     cleaned_title = _normalize_for_query(title)
     cleaned_artist = _normalize_for_query(artist) if artist else None
     placeholder_artist = None
-    
+
     # If artist is just a stop word or placeholder, treat as None/Unknown
     if cleaned_artist and is_placeholder_artist(cleaned_artist):
         if status_callback:
@@ -431,7 +443,7 @@ def resolve_with_parsing(
         cleaned_artist = None
 
     artist_list = _normalize_artist_list(artists)
-    
+
     # If we cleaned the artist (e.g. AOA_ -> AOA), use the cleaned version
     if cleaned_artist and cleaned_artist not in artist_list:
         artist_list = [cleaned_artist, *artist_list]
@@ -461,7 +473,7 @@ def resolve_with_parsing(
         if status_callback:
             status_callback(f"Parsing filename for additional metadata...")
 
-        parsed_options = parse_filename(title)
+        parsed_options = parse_filename(title, lookup_fn=artist_lookup_fn)
         best_match = None
         best_weighted_score = -1.0
 

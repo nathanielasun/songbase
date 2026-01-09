@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, Suspense } from 'react';
 import Link from 'next/link';
 import { MagnifyingGlassIcon, XMarkIcon, ArrowLeftIcon, ArrowDownTrayIcon, RadioIcon, MusicalNoteIcon } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
@@ -58,7 +58,7 @@ const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => 
   return response.json() as Promise<T>;
 };
 
-export default function SearchPage() {
+function SearchPageContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
@@ -145,6 +145,12 @@ export default function SearchPage() {
             title: song.title || 'Unknown Title',
             artist: song.artists.length > 0 ? song.artists.join(', ') : 'Unknown Artist',
             artistId: song.primary_artist_id ? String(song.primary_artist_id) : undefined,
+            artists: song.artists && song.artist_ids
+              ? song.artists.map((name, idx) => ({
+                  id: song.artist_ids[idx] ? String(song.artist_ids[idx]) : '',
+                  name,
+                })).filter(a => a.id)
+              : undefined,
             album: song.album || 'Unknown Album',
             albumId: song.album_id || undefined,
             duration: song.duration_sec || 0,
@@ -605,5 +611,13 @@ export default function SearchPage() {
         }}
       />
     </div>
+  );
+}
+
+export default function SearchPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-gradient-to-b from-gray-900 to-black flex items-center justify-center text-gray-400">Loading search...</div>}>
+      <SearchPageContent />
+    </Suspense>
   );
 }

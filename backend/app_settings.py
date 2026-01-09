@@ -31,8 +31,20 @@ def _default_settings() -> dict[str, Any]:
             "song_cache_dir": str(acquisition_config.REPO_ROOT / ".song_cache"),
             "metadata_dir": str(DEFAULT_METADATA_DIR),
         },
-        "sources": {
-            "last_seeded_at": None,
+        "vggish": {
+            "target_sample_rate": 16000,
+            "frame_sec": 0.96,
+            "hop_sec": 0.48,
+            "stft_window_sec": 0.025,
+            "stft_hop_sec": 0.010,
+            "num_mel_bins": 64,
+            "mel_min_hz": 125,
+            "mel_max_hz": 7500,
+            "log_offset": 0.01,
+            "device_preference": "auto",
+            "gpu_memory_fraction": 0.8,
+            "gpu_allow_growth": True,
+            "use_postprocess": True,
         },
     }
 

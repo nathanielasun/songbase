@@ -86,14 +86,6 @@ class PipelineRunRequest(BaseModel):
     run_until_empty: bool = False
 
 
-class SeedSourcesRequest(BaseModel):
-    sources_file: str | None = None
-
-
-class ClearSourcesRequest(BaseModel):
-    sources_file: str | None = None
-
-
 class LinkSongsRequest(BaseModel):
     album_id: str
     sha_ids: list[str]
@@ -119,6 +111,7 @@ class CatalogEntry(BaseModel):
     verified: bool | None = None
     verification_source: str | None = None
     artists: list[str] = []
+    artist_ids: list[int] = []
     primary_artist_id: int | None = None
     album_id: str | None = None
 
@@ -440,10 +433,19 @@ def _fetch_song_detail(sha_id: str) -> dict[str, Any] | None:
                     s.verification_score,
                     s.musicbrainz_recording_id,
                     COALESCE(
-                        ARRAY_AGG(DISTINCT a.name)
-                        FILTER (WHERE a.name IS NOT NULL),
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
                         ARRAY[]::TEXT[]
                     ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids,
                     COALESCE(
                         ARRAY_AGG(DISTINCT g.name)
                         FILTER (WHERE g.name IS NOT NULL),
@@ -484,7 +486,7 @@ def _fetch_song_detail(sha_id: str) -> dict[str, Any] | None:
             if not row:
                 return None
 
-            primary_artist_name = row[15]
+            primary_artist_name = row[16]
             fallback_artist = row[10][0] if row[10] else None
             album_id = None
             if row[2] and (primary_artist_name or fallback_artist):
@@ -521,11 +523,12 @@ def _fetch_song_detail(sha_id: str) -> dict[str, Any] | None:
         "verification_score": row[8],
         "musicbrainz_recording_id": row[9],
         "artists": row[10],
-        "genres": row[11],
-        "labels": row[12],
-        "producers": row[13],
-        "primary_artist_id": row[14],
-        "primary_artist_name": row[15],
+        "artist_ids": list(row[11]) if row[11] else [],
+        "genres": row[12],
+        "labels": row[13],
+        "producers": row[14],
+        "primary_artist_id": row[15],
+        "primary_artist_name": row[16],
         "album_id": album_id,
         "album_artist_name": album_artist_name,
         "album_release_year": album_release_year,
@@ -695,49 +698,6 @@ def _tail_state(path: Path, limit: int) -> list[dict[str, Any]]:
             if isinstance(payload, dict):
                 entries.append(payload)
     return list(entries)
-
-
-def _source_key(title: str, artist: str | None) -> tuple[str, str]:
-    return (title.strip().lower(), (artist or "").strip().lower())
-
-
-def _queue_status_lookup(
-    items: list[acquisition_sources.SourceItem],
-) -> tuple[dict[tuple[str, str], str], bool]:
-    if not items:
-        return {}, True
-    title_set = {item.title.strip().lower() for item in items if item.title}
-    if not title_set:
-        return {}, True
-
-    query = """
-        SELECT title, artist, status
-        FROM metadata.download_queue
-        WHERE LOWER(title) = ANY(%s)
-    """
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cur:
-                cur.execute(query, (sorted(title_set),))
-                rows = cur.fetchall()
-    except Exception:
-        return {}, False
-
-    status_map: dict[tuple[str, str], str] = {}
-    for title, artist, status in rows:
-        key = _source_key(title, artist)
-        status_map[key] = status
-    return status_map, True
-
-
-def _last_seeded_at() -> str | None:
-    settings = app_settings.load_settings()
-    sources = settings.get("sources")
-    if isinstance(sources, dict):
-        value = sources.get("last_seeded_at")
-        if isinstance(value, str):
-            return value
-    return None
 
 
 def _coerce_result(payload: Any) -> Any:
@@ -949,10 +909,19 @@ async def list_catalog(
                         )
                     END AS album_id,
                     COALESCE(
-                        ARRAY_AGG(DISTINCT a.name)
-                        FILTER (WHERE a.name IS NOT NULL AND sa.role = 'primary'),
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
                         ARRAY[]::TEXT[]
-                    ) AS artists
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 LEFT JOIN metadata.song_artists sa_primary
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
@@ -982,6 +951,7 @@ async def list_catalog(
             primary_artist_id=row[8],
             album_id=row[9],
             artists=list(row[10] or []),
+            artist_ids=list(row[11] or []),
         ).model_dump()
         for row in rows
     ]
@@ -1308,7 +1278,21 @@ async def get_artist(
                     CASE
                         WHEN s.album IS NULL OR s.album = '' THEN NULL
                         ELSE md5(lower(coalesce(s.album, '')) || '::' || lower(%s))
-                    END AS album_id
+                    END AS album_id,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
                 WHERE sa.artist_id = %s
@@ -1334,6 +1318,8 @@ async def get_artist(
                 "duration_sec": row[3],
                 "track_number": row[4],
                 "album_id": row[5],
+                "artists": list(row[6] or []),
+                "artist_ids": list(row[7] or []),
             }
             for row in song_rows
         ],
@@ -1496,7 +1482,21 @@ async def get_album(
                     s.sha_id,
                     s.title,
                     s.duration_sec,
-                    s.track_number
+                    s.track_number,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 LEFT JOIN metadata.song_artists sa_primary
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
@@ -1526,6 +1526,8 @@ async def get_album(
                 "title": row[1],
                 "duration_sec": row[2],
                 "track_number": row[3],
+                "artists": list(row[4] or []),
+                "artist_ids": list(row[5] or []),
             }
             for row in song_rows
         ],
@@ -2453,82 +2455,6 @@ async def list_queue(
     ]
 
 
-@router.get("/sources")
-async def list_sources(limit: int = 200, offset: int = 0) -> dict[str, Any]:
-    if limit < 1:
-        raise HTTPException(status_code=400, detail="limit must be >= 1")
-    if offset < 0:
-        raise HTTPException(status_code=400, detail="offset must be >= 0")
-
-    sources_path = acquisition_config.SOURCES_PATH
-    items = acquisition_sources.load_sources_file(sources_path)
-    total = len(items)
-    sliced = items[offset : offset + limit]
-
-    status_map, queue_available = _queue_status_lookup(sliced)
-    payload = []
-    for item in sliced:
-        status = status_map.get(_source_key(item.title, item.artist))
-        payload.append(
-            {
-                "title": item.title,
-                "artist": item.artist,
-                "album": item.album,
-                "genre": item.genre,
-                "search_query": item.search_query,
-                "source_url": item.source_url,
-                "queued": status is not None if queue_available else None,
-                "queue_status": status,
-            }
-        )
-
-    return {
-        "items": payload,
-        "total": total,
-        "path": str(sources_path),
-        "queue_available": queue_available,
-        "last_seeded_at": _last_seeded_at(),
-    }
-
-
-@router.post("/seed-sources")
-async def seed_sources(payload: SeedSourcesRequest) -> dict[str, Any]:
-    sources_path = (
-        Path(payload.sources_file).expanduser().resolve()
-        if payload.sources_file
-        else acquisition_config.SOURCES_PATH
-    )
-    if not sources_path.exists():
-        raise HTTPException(status_code=400, detail="sources.jsonl not found.")
-
-    items = acquisition_sources.load_sources_file(sources_path)
-    inserted = acquisition_sources.insert_sources(items)
-    app_settings.update_settings({"sources": {"last_seeded_at": _utc_now()}})
-
-    return {
-        "inserted": inserted,
-        "total": len(items),
-        "path": str(sources_path),
-        "last_seeded_at": _last_seeded_at(),
-    }
-
-
-@router.post("/sources/clear")
-async def clear_sources(payload: ClearSourcesRequest) -> dict[str, Any]:
-    sources_path = (
-        Path(payload.sources_file).expanduser().resolve()
-        if payload.sources_file
-        else acquisition_config.SOURCES_PATH
-    )
-    cleared = acquisition_sources.clear_sources_file(sources_path)
-    app_settings.update_settings({"sources": {"last_seeded_at": None}})
-    return {
-        "cleared": cleared,
-        "path": str(sources_path),
-        "last_seeded_at": _last_seeded_at(),
-    }
-
-
 @router.get("/stats")
 async def library_stats() -> dict[str, Any]:
     with get_connection() as conn:
@@ -2861,11 +2787,17 @@ async def search_library(
                      JOIN metadata.genres g ON sg.genre_id = g.genre_id
                      WHERE sg.sha_id = s.sha_id LIMIT 1) AS genre,
                     COALESCE(
-                        array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL),
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
                         ARRAY[]::TEXT[]
                     ) AS artists,
                     COALESCE(
-                        array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL),
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
                         ARRAY[]::BIGINT[]
                     ) AS artist_ids,
                     MAX(a_primary.artist_id) AS primary_artist_id
@@ -2874,8 +2806,6 @@ async def search_library(
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
                 LEFT JOIN metadata.artists a_primary
                     ON a_primary.artist_id = sa_primary.artist_id
-                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
-                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 {where_clause}
                 GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 ORDER BY s.title, s.sha_id

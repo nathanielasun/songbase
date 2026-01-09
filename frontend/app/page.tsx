@@ -20,6 +20,7 @@ type CatalogEntry = {
   verified?: boolean | null;
   verification_source?: string | null;
   artists: string[];
+  artist_ids: number[];
   primary_artist_id?: number | null;
   album_id?: string | null;
 };
@@ -135,6 +136,12 @@ export default function Home() {
             title: entry.title || 'Unknown Title',
             artist: entry.artists.length ? entry.artists.join(', ') : 'Unknown Artist',
             artistId: entry.primary_artist_id ? String(entry.primary_artist_id) : undefined,
+            artists: entry.artists && entry.artist_ids
+              ? entry.artists.map((name, idx) => ({
+                  id: entry.artist_ids[idx] ? String(entry.artist_ids[idx]) : '',
+                  name,
+                })).filter(a => a.id)
+              : undefined,
             album: entry.album || 'Unknown Album',
             albumId: entry.album_id || undefined,
             duration: entry.duration_sec ?? 0,

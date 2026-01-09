@@ -683,6 +683,13 @@ def sync_images_and_profiles(
 
     log(f"\nStarting image sync for {total_songs} song(s) and {total_artists} artist(s)...\n")
 
+    def send_progress() -> None:
+        """Send progress update via status callback."""
+        if status_callback:
+            status_callback(
+                f"__PROGRESS__:{songs_processed}:{song_images}:{album_images}:{artist_profiles}:{artist_images}:{skipped}:{failed}"
+            )
+
     synced_releases: set[str] = set()
 
     with with_image_connection() as image_conn:
@@ -714,6 +721,7 @@ def sync_images_and_profiles(
                 if has_song_image and has_album_image:
                     log(f"  → Already has cover art, skipping")
                     skipped += 1
+                    send_progress()
                     continue
 
                 try:
@@ -721,6 +729,7 @@ def sync_images_and_profiles(
                     if not recording:
                         log(f"  ✗ No recording found")
                         skipped += 1
+                        send_progress()
                         continue
 
                     release_id, release_title = _extract_release(
@@ -762,10 +771,12 @@ def sync_images_and_profiles(
                         log(f"  → No cover art available")
                     if not dry_run:
                         image_conn.commit()
+                    send_progress()
                 except Exception as e:  # noqa: BLE001
                     log(f"  ✗ Failed: {str(e)}")
                     failed += 1
                     image_conn.rollback()
+                    send_progress()
 
             artist_count = 0
             if total_artists > 0:
@@ -781,6 +792,7 @@ def sync_images_and_profiles(
                 if artist_profile_exists(image_cur, artist.name):
                     log(f"  → Already has profile, skipping")
                     skipped += 1
+                    send_progress()
                     continue
 
                 try:
@@ -802,10 +814,12 @@ def sync_images_and_profiles(
                         log(f"  ✗ No profile found")
                     if not dry_run:
                         image_conn.commit()
+                    send_progress()
                 except Exception as e:  # noqa: BLE001
                     log(f"  ✗ Failed: {str(e)}")
                     failed += 1
                     image_conn.rollback()
+                    send_progress()
 
     return ImagePipelineResult(
         songs_processed=songs_processed,

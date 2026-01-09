@@ -33,6 +33,50 @@ def load_vggish_embeddings(npz_path: Path) -> np.ndarray:
     return embeddings.astype(np.float32)
 
 
+def upsert_embedding(conn, sha_id: str, embedding: list[float]) -> None:
+    """
+    Insert or update a single averaged embedding for a song.
+
+    Args:
+        conn: Database connection
+        sha_id: Song hash ID
+        embedding: List of 128 floats representing the averaged embedding
+    """
+    model_version = vggish_config.VGGISH_CHECKPOINT_VERSION
+    segment_start = 0.0  # Averaged embedding covers entire song
+    segment_end = -1.0   # Sentinel value for "full song average"
+
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            INSERT INTO embeddings.vggish_embeddings (
+                sha_id,
+                model_name,
+                model_version,
+                preprocess_version,
+                vector,
+                segment_start_sec,
+                segment_end_sec
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (sha_id, model_name, model_version, segment_start_sec, segment_end_sec)
+            DO UPDATE SET
+                vector = EXCLUDED.vector,
+                preprocess_version = EXCLUDED.preprocess_version
+            """,
+            (
+                sha_id,
+                "vggish",
+                model_version,
+                default_preprocess_version(),
+                Vector(embedding),
+                segment_start,
+                segment_end,
+            ),
+        )
+    conn.commit()
+
+
 def insert_vggish_embeddings(
     cur,
     sha_id: str,

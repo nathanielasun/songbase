@@ -2,12 +2,16 @@ fastapi==0.115.6
 uvicorn[standard]==0.34.0
 pydantic==2.10.6
 python-multipart==0.0.20
-numpy==2.2.3
+numpy>=1.23.0,<2.0  # TensorFlow 2.17.x requires numpy <2.0
 mutagen==1.47.0
 resampy==0.4.3
-tensorflow>=2.16.0
+tensorflow>=2.16.0,<2.18.0  # Pinned for tensorflow-metal compatibility on Apple Silicon
 tf-slim==1.1.0
 psycopg[binary]==3.2.3
 pgvector==0.3.6
 musicbrainzngs==0.7.1
 yt-dlp==2025.2.19
+
+# Optional: Metal GPU acceleration for macOS (Apple Silicon M1/M2/M3)
+# Auto-installed by bootstrap.py on Apple Silicon, or install manually:
+#   pip install tensorflow-metal>=1.1.0

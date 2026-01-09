@@ -125,15 +125,25 @@ def generate_song_radio(
                     END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    COALESCE(array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL), ARRAY[]::TEXT[]) AS artists,
-                    COALESCE(array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL), ARRAY[]::BIGINT[]) AS artist_ids
+                    COALESCE(
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 LEFT JOIN metadata.song_artists sa_primary
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
                 LEFT JOIN metadata.artists a_primary
                     ON a_primary.artist_id = sa_primary.artist_id
-                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
-                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 WHERE s.sha_id IN ({placeholders})
                 GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 """,
@@ -264,15 +274,25 @@ def generate_artist_radio(
                     END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    COALESCE(array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL), ARRAY[]::TEXT[]) AS artists,
-                    COALESCE(array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL), ARRAY[]::BIGINT[]) AS artist_ids
+                    COALESCE(
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 LEFT JOIN metadata.song_artists sa_primary
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
                 LEFT JOIN metadata.artists a_primary
                     ON a_primary.artist_id = sa_primary.artist_id
-                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
-                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 WHERE s.sha_id IN ({placeholders})
                 GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 """,
@@ -546,15 +566,25 @@ def generate_preference_playlist(
                     END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    COALESCE(array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL), ARRAY[]::TEXT[]) AS artists,
-                    COALESCE(array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL), ARRAY[]::BIGINT[]) AS artist_ids
+                    COALESCE(
+                        (SELECT array_agg(sub_a.name ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        (SELECT array_agg(sub_a.artist_id ORDER BY sub_sa.role DESC, sub_a.artist_id)
+                         FROM metadata.song_artists sub_sa
+                         JOIN metadata.artists sub_a ON sub_a.artist_id = sub_sa.artist_id
+                         WHERE sub_sa.sha_id = s.sha_id),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids
                 FROM metadata.songs s
                 LEFT JOIN metadata.song_artists sa_primary
                     ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
                 LEFT JOIN metadata.artists a_primary
                     ON a_primary.artist_id = sa_primary.artist_id
-                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
-                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 WHERE s.sha_id IN ({placeholders})
                 GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 """,

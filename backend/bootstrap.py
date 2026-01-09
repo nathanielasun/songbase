@@ -38,6 +38,11 @@ REQUIRED_MODULES = (
     "tf_slim",
 )
 
+# Optional modules for GPU acceleration (not required for CPU-only operation)
+OPTIONAL_MODULES = {
+    "tensorflow_metal": "Metal GPU acceleration for macOS (Apple Silicon M1/M2/M3)",
+}
+
 
 def _requirements_hash(path: Path) -> str | None:
     if not path.exists():
@@ -70,7 +75,123 @@ def _modules_ready() -> bool:
             importlib.import_module(module_name)
         except ImportError:
             return False
+        except Exception as exc:
+            # Handle cases like tensorflow failing due to incompatible plugins
+            if module_name == "tensorflow" and "metal" in str(exc).lower():
+                print(
+                    f"⚠ TensorFlow failed to load due to incompatible tensorflow-metal plugin.\n"
+                    f"  Attempting to fix by uninstalling tensorflow-metal..."
+                )
+                try:
+                    subprocess.run(
+                        [sys.executable, "-m", "pip", "uninstall", "tensorflow-metal", "-y"],
+                        check=True,
+                        capture_output=True,
+                    )
+                    print("✓ Removed incompatible tensorflow-metal. Please restart the application.")
+                except subprocess.CalledProcessError:
+                    print(
+                        f"  Failed to auto-remove. Please run manually:\n"
+                        f"    pip uninstall tensorflow-metal"
+                    )
+                return False
+            raise
     return True
+
+
+def _is_apple_silicon() -> bool:
+    """Check if running on Apple Silicon (M1/M2/M3)."""
+    import platform
+    return platform.system() == "Darwin" and platform.processor() == "arm"
+
+
+def _is_tensorflow_metal_installed() -> bool:
+    """Check if tensorflow-metal package is installed."""
+    try:
+        from importlib.metadata import distributions
+        installed_packages = {dist.metadata['Name'].lower() for dist in distributions()}
+        return 'tensorflow-metal' in installed_packages
+    except Exception:
+        return False
+
+
+def _install_tensorflow_metal(env: dict[str, str] | None = None) -> bool:
+    """
+    Attempt to install tensorflow-metal on Apple Silicon Macs.
+
+    Returns True if installation succeeded or module already installed.
+    """
+    # Check if already installed
+    if _is_tensorflow_metal_installed():
+        return True
+
+    if not _is_apple_silicon():
+        return False
+
+    # Verify TensorFlow version for compatibility
+    try:
+        import tensorflow as tf
+        tf_version = tf.__version__
+        major, minor = map(int, tf_version.split('.')[:2])
+
+        # tensorflow-metal works with TensorFlow 2.13-2.17
+        # requirements.txt pins TensorFlow to <2.18.0 for compatibility
+        if major != 2 or minor < 13 or minor > 17:
+            print(
+                f"⚠ TensorFlow {tf_version} detected on Apple Silicon.\n"
+                f"  tensorflow-metal requires TensorFlow 2.13-2.17.\n"
+                f"  Please install a compatible version:\n"
+                f"    pip install 'tensorflow>=2.16.0,<2.18.0'"
+            )
+            return False
+    except Exception:
+        pass
+
+    print("🍎 Apple Silicon detected. Installing tensorflow-metal for GPU acceleration...")
+
+    install_env = env or os.environ.copy()
+    install_env.setdefault("PIP_DISABLE_PIP_VERSION_CHECK", "1")
+    install_env.setdefault("PIP_CACHE_DIR", str(PIP_CACHE_DIR))
+
+    cmd = [
+        sys.executable,
+        "-m",
+        "pip",
+        "install",
+        "tensorflow-metal>=1.1.0",
+    ]
+
+    try:
+        subprocess.run(cmd, check=True, env=install_env, capture_output=True)
+        # Invalidate import caches so the newly installed module can be found
+        importlib.invalidate_caches()
+        print("✓ tensorflow-metal installed successfully")
+        return True
+    except subprocess.CalledProcessError as exc:
+        print(f"⚠ Failed to install tensorflow-metal: {exc}")
+        print("  GPU acceleration will not be available. CPU will be used instead.")
+        return False
+
+
+def _check_optional_modules(skip_metal_warning: bool = False) -> None:
+    """Check and log availability of optional GPU acceleration modules."""
+    for module_name, description in OPTIONAL_MODULES.items():
+        if module_name == "tensorflow_metal":
+            # Check package installation, not module import (tensorflow-metal is a plugin)
+            if _is_tensorflow_metal_installed():
+                print(f"✓ tensorflow-metal is installed: {description}")
+            elif not skip_metal_warning and _is_apple_silicon():
+                print(
+                    f"ℹ tensorflow-metal not installed.\n"
+                    f"  {description}\n"
+                    f"  To enable Metal GPU acceleration, run: pip install tensorflow-metal"
+                )
+        else:
+            try:
+                importlib.import_module(module_name)
+                print(f"✓ Optional module '{module_name}' is installed: {description}")
+            except ImportError:
+                print(f"ℹ Optional module '{module_name}' not installed: {description}")
 
 
 def _resolve_wheelhouse() -> Path | None:
@@ -99,6 +220,11 @@ def ensure_python_deps(
         and _marker_matches(requirements_hash, python_tag)
         and _modules_ready()
     ):
+        # Auto-install tensorflow-metal on Apple Silicon if not present
+        metal_attempted = _is_apple_silicon()
+        _install_tensorflow_metal()
+        # Check optional modules when dependencies are ready
+        _check_optional_modules(skip_metal_warning=metal_attempted)
         return
 
     METADATA_ROOT.mkdir(parents=True, exist_ok=True)
@@ -131,10 +257,17 @@ def ensure_python_deps(
         ]
     subprocess.run(cmd, check=True, env=env)
 
+    # Auto-install tensorflow-metal on Apple Silicon Macs
+    metal_attempted = _is_apple_silicon()
+    _install_tensorflow_metal(env)
+
     MARKER_PATH.write_text(
         f"requirements={requirements_hash}\npython={python_tag}\n",
         encoding="utf-8",
     )
+
+    # Check optional modules after installation
+    _check_optional_modules(skip_metal_warning=metal_attempted)
 
 
 def _parse_args() -> argparse.Namespace:

@@ -21,6 +21,7 @@ type CatalogSong = {
   album_id?: string | null;
   duration_sec?: number | null;
   artists: string[];
+  artist_ids?: number[];
   primary_artist_id?: number | null;
 };
 
@@ -71,6 +72,12 @@ export default function LikedSongsPage() {
               title: data.title || 'Unknown Title',
               artist: data.artists?.length > 0 ? data.artists.join(', ') : 'Unknown Artist',
               artistId: data.primary_artist_id ? String(data.primary_artist_id) : undefined,
+              artists: data.artists && data.artist_ids
+                ? data.artists.map((name, idx) => ({
+                    id: data.artist_ids![idx] ? String(data.artist_ids![idx]) : '',
+                    name,
+                  })).filter(a => a.id)
+                : undefined,
               album: data.album || 'Unknown Album',
               albumId: data.album_id || undefined,
               duration: data.duration_sec || 0,
@@ -85,7 +92,8 @@ export default function LikedSongsPage() {
         });
 
         const results = await Promise.all(songPromises);
-        allSongs.push(...results.filter((s): s is Song => s !== null));
+        const validSongs = results.filter((s) => s !== null) as Song[];
+        allSongs.push(...validSongs);
       }
 
       setSongs(allSongs);

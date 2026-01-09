@@ -72,6 +72,12 @@ export default function SongRadioPage() {
           title: song.title || 'Unknown Title',
           artist: song.artists.length > 0 ? song.artists.join(', ') : 'Unknown Artist',
           artistId: song.artist_ids.length > 0 ? String(song.artist_ids[0]) : undefined,
+          artists: song.artists && song.artist_ids
+            ? song.artists.map((name, idx) => ({
+                id: song.artist_ids[idx] ? String(song.artist_ids[idx]) : '',
+                name,
+              })).filter(a => a.id)
+            : undefined,
           album: song.album || 'Unknown Album',
           albumId: song.album_id || undefined,
           duration: song.duration_sec || 0,

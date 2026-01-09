@@ -18,6 +18,8 @@ type ArtistSong = {
   duration_sec?: number | null;
   track_number?: number | null;
   album_id?: string | null;
+  artists?: string[];
+  artist_ids?: number[];
 };
 
 type ArtistAlbum = {
@@ -97,8 +99,18 @@ export default function ArtistPage() {
       id: song.sha_id,
       hashId: song.sha_id,
       title: song.title,
-      artist: artistData.name,
-      artistId: String(artistData.artist_id),
+      artist: song.artists && song.artists.length > 0
+        ? song.artists.join(', ')
+        : artistData.name,
+      artistId: song.artist_ids && song.artist_ids.length > 0
+        ? String(song.artist_ids[0])
+        : String(artistData.artist_id),
+      artists: song.artists && song.artist_ids
+        ? song.artists.map((name, idx) => ({
+            id: song.artist_ids![idx] ? String(song.artist_ids![idx]) : '',
+            name,
+          })).filter(a => a.id)
+        : undefined,
       album: song.album || undefined,
       albumId: song.album_id || undefined,
       duration: song.duration_sec ?? 0,
