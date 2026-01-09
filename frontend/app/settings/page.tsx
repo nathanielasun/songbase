@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { ArrowDownTrayIcon, Cog8ToothIcon, FolderIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, Cog8ToothIcon, CpuChipIcon, FolderIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 
 type SettingsPayload = {
   pipeline: {
@@ -20,6 +20,13 @@ type SettingsPayload = {
     song_cache_dir: string;
   };
   download_filename_format?: string;
+  vggish?: {
+    target_sample_rate: number;
+    device_preference: string;
+    gpu_memory_fraction: number;
+    gpu_allow_growth: boolean;
+    use_postprocess: boolean;
+  };
 };
 
 type ResetResponse = {
@@ -48,6 +55,12 @@ type FormState = {
   metadataDir: string;
   songCacheDir: string;
   downloadFilenameFormat: string;
+  // PCM Processing settings
+  targetSampleRate: string;
+  devicePreference: string;
+  gpuMemoryFraction: string;
+  gpuAllowGrowth: boolean;
+  usePostprocess: boolean;
 };
 
 const emptyForm: FormState = {
@@ -63,6 +76,12 @@ const emptyForm: FormState = {
   metadataDir: '',
   songCacheDir: '',
   downloadFilenameFormat: '{artist} - {title}',
+  // PCM Processing defaults
+  targetSampleRate: '16000',
+  devicePreference: 'auto',
+  gpuMemoryFraction: '0.8',
+  gpuAllowGrowth: true,
+  usePostprocess: true,
 };
 
 export default function SettingsPage() {
@@ -104,6 +123,12 @@ export default function SettingsPage() {
           metadataDir: data.paths.metadata_dir ?? '',
           songCacheDir: data.paths.song_cache_dir ?? '',
           downloadFilenameFormat: data.download_filename_format ?? '{artist} - {title}',
+          // PCM Processing settings
+          targetSampleRate: data.vggish?.target_sample_rate?.toString() ?? '16000',
+          devicePreference: data.vggish?.device_preference ?? 'auto',
+          gpuMemoryFraction: data.vggish?.gpu_memory_fraction?.toString() ?? '0.8',
+          gpuAllowGrowth: data.vggish?.gpu_allow_growth ?? true,
+          usePostprocess: data.vggish?.use_postprocess ?? true,
         });
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load settings.');
@@ -157,6 +182,20 @@ export default function SettingsPage() {
         method: 'PUT',
         body: JSON.stringify(payload),
       });
+
+      // Save VGGish/PCM settings via dedicated endpoint
+      const vggishPayload = {
+        target_sample_rate: parseNumber(form.targetSampleRate) ?? 16000,
+        device_preference: form.devicePreference,
+        gpu_memory_fraction: parseFloat(form.gpuMemoryFraction) || 0.8,
+        gpu_allow_growth: form.gpuAllowGrowth,
+        use_postprocess: form.usePostprocess,
+      };
+      await fetchJson('/api/settings/vggish', {
+        method: 'PUT',
+        body: JSON.stringify(vggishPayload),
+      });
+
       setStatusMessage('Settings saved. Changes apply on the next pipeline run.');
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : 'Failed to save settings.');
@@ -387,6 +426,80 @@ export default function SettingsPage() {
               </div>
               <p className="text-xs text-gray-500 mt-4">
                 Changes apply when the backend restarts or the next pipeline run begins.
+              </p>
+            </section>
+
+            <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800 lg:col-span-2">
+              <div className="flex items-center gap-3">
+                <CpuChipIcon className="h-5 w-5 text-gray-300" />
+                <h2 className="text-xl font-semibold">PCM Processing</h2>
+              </div>
+              <p className="text-sm text-gray-400 mt-2">
+                Configure audio processing settings for VGGish embeddings.
+              </p>
+
+              <div className="grid gap-4 mt-5 md:grid-cols-3">
+                <label className="text-sm text-gray-300">
+                  Sample rate (Hz)
+                  <input
+                    type="number"
+                    min={8000}
+                    max={48000}
+                    step={1000}
+                    value={form.targetSampleRate}
+                    onChange={(e) => setForm((prev) => ({ ...prev, targetSampleRate: e.target.value }))}
+                    className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
+                  />
+                </label>
+                <label className="text-sm text-gray-300">
+                  Device preference
+                  <select
+                    value={form.devicePreference}
+                    onChange={(e) => setForm((prev) => ({ ...prev, devicePreference: e.target.value }))}
+                    className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
+                  >
+                    <option value="auto">Auto (detect best)</option>
+                    <option value="cpu">CPU</option>
+                    <option value="gpu">GPU (CUDA)</option>
+                    <option value="metal">Metal (Apple Silicon)</option>
+                  </select>
+                </label>
+                <label className="text-sm text-gray-300">
+                  GPU memory fraction
+                  <input
+                    type="number"
+                    min={0.1}
+                    max={1.0}
+                    step={0.1}
+                    value={form.gpuMemoryFraction}
+                    onChange={(e) => setForm((prev) => ({ ...prev, gpuMemoryFraction: e.target.value }))}
+                    className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
+                  />
+                </label>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-6 mt-4 text-sm text-gray-300">
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.gpuAllowGrowth}
+                    onChange={(e) => setForm((prev) => ({ ...prev, gpuAllowGrowth: e.target.checked }))}
+                    className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                  />
+                  Allow GPU memory growth
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={form.usePostprocess}
+                    onChange={(e) => setForm((prev) => ({ ...prev, usePostprocess: e.target.checked }))}
+                    className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-white focus:ring-0"
+                  />
+                  Use postprocessing (PCA/whitening)
+                </label>
+              </div>
+              <p className="text-xs text-gray-500 mt-4">
+                Sample rate of 16000 Hz is recommended for VGGish. Changing these settings requires re-embedding songs.
               </p>
             </section>
 

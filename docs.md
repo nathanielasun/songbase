@@ -19,10 +19,10 @@ songbase/
 ├── backend/
 │   ├── api/           # FastAPI REST API
 │   │   ├── routes/
-│   │   │   ├── songs.py      - Song listing and retrieval endpoints
 │   │   │   ├── processing.py - Audio processing endpoints
 │   │   │   ├── library.py    - Metadata + queue + pipeline endpoints
-│   │   │   └── settings.py   - Settings read/write endpoints
+│   │   │   ├── settings.py   - Settings read/write endpoints
+│   │   │   └── acquisition.py - Acquisition backend configuration endpoints
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
 │   ├── bootstrap.py     - Python dependency bootstrapper
@@ -161,9 +161,14 @@ songbase/
 - **Notes**: Database tab includes a VGGish Embeddings panel for configuring embedding parameters (sample rate, mel spectrogram settings, device preference) and recalculating embeddings with live progress.
 
 ### frontend/app/settings/page.tsx
-- **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
-- **Uses**: `/api/settings`, `/api/settings/reset`
-- **Notes**: Reset can clear embeddings, hashed music, and artist/album metadata + images.
+- **Purpose**: Settings UI for batch sizes, storage paths, PCM processing, and reset actions.
+- **Uses**: `/api/settings`, `/api/settings/vggish`, `/api/settings/reset`
+- **Sections**:
+  - **Processing Defaults**: Download/process limits, worker counts, verify/images toggles
+  - **Storage Paths**: Temp MP3 dir, SQL database dir, hashed song cache dir
+  - **PCM Processing**: Sample rate, device preference (auto/cpu/gpu/metal), GPU memory fraction, allow growth, postprocessing
+  - **Download Settings**: Filename format with placeholders
+  - **Danger Zone**: Reset embeddings, hashed music, song metadata, artist/album data
 
 ### frontend/app/radio/for-you/page.tsx
 - **Purpose**: Personalized radio based on user preferences (liked/disliked songs)
@@ -199,7 +204,7 @@ songbase/
 **Fetching songs from the frontend**:
 ```typescript
 // In a React component
-const response = await fetch('/api/songs');
+const response = await fetch('/api/library/songs');
 const songs = await response.json();
 ```
 
@@ -222,19 +227,8 @@ try {
   - CORS middleware (allows requests from http://localhost:3000)
   - Auto-generated OpenAPI docs at `/docs`
   - Health check endpoint at `/health`
-  - Routes organized by domain (songs, processing, library, settings)
+  - Routes organized by domain (processing, library, settings, acquisition)
   - Auto-bootstraps local Postgres if database URLs are missing
-
-### backend/api/routes/songs.py
-- **Purpose**: Song management endpoints
-- **Endpoints**:
-  - `GET /api/songs/`: List all MP3 files in the songs directory
-  - `GET /api/songs/{song_id}`: Get details for a specific song
-- **Usage**:
-  ```bash
-  curl http://localhost:8000/api/songs/
-  curl http://localhost:8000/api/songs/my-song
-  ```
 
 ### backend/api/routes/processing.py
 - **Purpose**: Audio processing endpoints
