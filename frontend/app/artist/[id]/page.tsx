@@ -9,6 +9,7 @@ import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { usePlaylist } from '@/contexts/PlaylistContext';
+import { downloadSong } from '@/lib/downloadUtils';
 
 type ArtistSong = {
   sha_id: string;
@@ -148,9 +149,7 @@ export default function ArtistPage() {
     console.log('Download album:', albumTitle, albumId, '(stub - will interface with backend)');
   };
 
-  const handleDownloadSong = (song: Song) => {
-    console.log('Download song:', song.title, '(stub - will interface with backend)');
-  };
+  const handleDownloadSong = downloadSong;
 
   const handleArtistRadio = () => {
     router.push(`/radio/artist/${artistId}`);
@@ -192,7 +191,11 @@ export default function ArtistPage() {
       </div>
 
       <div className="px-8 py-4 flex items-center gap-4">
-        <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
+        <button
+          onClick={() => artistSongs.length > 0 && handleSongClick(artistSongs[0])}
+          disabled={artistSongs.length === 0}
+          className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+        >
           <PlayIcon className="w-6 h-6" />
         </button>
         <button

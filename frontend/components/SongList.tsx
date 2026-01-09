@@ -3,10 +3,11 @@
 import Image from 'next/image';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon, QueueListIcon } from '@heroicons/react/24/solid';
-import { RadioIcon } from '@heroicons/react/24/outline';
+import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon, QueueListIcon, XMarkIcon, HeartIcon } from '@heroicons/react/24/solid';
+import { RadioIcon, HeartIcon as HeartOutlineIcon } from '@heroicons/react/24/outline';
 import { Song } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
+import { useUserPreferences } from '@/contexts/UserPreferencesContext';
 
 interface SongListProps {
   songs: Song[];
@@ -16,6 +17,9 @@ interface SongListProps {
   onAddToPlaylist?: (song: Song) => void;
   onDownload?: (song: Song) => void;
   onAddToQueue?: (song: Song) => void;
+  onRemove?: (song: Song) => void;
+  removeTitle?: string;
+  showLikeButton?: boolean;
 }
 
 export default function SongList({
@@ -26,27 +30,45 @@ export default function SongList({
   onAddToPlaylist,
   onDownload,
   onAddToQueue,
+  onRemove,
+  removeTitle = 'Remove',
+  showLikeButton = true,
 }: SongListProps) {
   const router = useRouter();
+  const { isLiked, likeSong } = useUserPreferences();
+
+  // Determine grid columns based on available actions
+  const hasRemove = !!onRemove;
+  // Base columns: # | Title | Album | Artist | Like | Duration | Download | Queue | Playlist | Radio | (Remove)
+  const gridCols = hasRemove
+    ? 'grid-cols-[auto_3fr_2fr_2fr_auto_1fr_auto_auto_auto_auto_auto]'
+    : 'grid-cols-[auto_3fr_2fr_2fr_auto_1fr_auto_auto_auto_auto]';
 
   const handleSongRadio = (song: Song, e: React.MouseEvent) => {
     e.stopPropagation();
     router.push(`/radio/song/${song.hashId}`);
   };
 
+  const handleLike = (song: Song, e: React.MouseEvent) => {
+    e.stopPropagation();
+    likeSong(song.id);
+  };
+
   return (
     <div className="w-full">
       {/* Table Header */}
-      <div className="grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto_auto] gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800">
+      <div className={`grid ${gridCols} gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800`}>
         <div className="w-10">#</div>
         <div>Title</div>
         <div>Album</div>
         <div>Artist</div>
+        <div className="w-10"></div>{/* Like */}
         <div>Duration</div>
         <div className="w-10"></div>
         <div className="w-10"></div>
         <div className="w-10"></div>
         <div className="w-10"></div>
+        {hasRemove && <div className="w-10"></div>}
       </div>
 
       {/* Song Rows */}
@@ -56,7 +78,7 @@ export default function SongList({
           return (
             <div
               key={song.id}
-              className={`grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto_auto] gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
+              className={`grid ${gridCols} gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
                 isCurrentSong ? 'bg-gray-800' : ''
               }`}
               onClick={() => onSongClick(song)}
@@ -77,25 +99,12 @@ export default function SongList({
 
               {/* Title with Album Art */}
               <div className="flex items-center gap-3 min-w-0">
-                {song.albumArt ? (
-                  <img
-                    src={song.albumArt}
-                    alt=""
-                    width={40}
-                    height={40}
-                    className="rounded object-cover bg-gray-800"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                      const placeholder = e.currentTarget.nextElementSibling;
-                      if (placeholder) {
-                        (placeholder as HTMLElement).style.display = 'block';
-                      }
-                    }}
-                  />
-                ) : null}
-                <div
-                  className="w-10 h-10 rounded bg-gray-800 flex-shrink-0"
-                  style={{ display: song.albumArt ? 'none' : 'block' }}
+                <img
+                  src={song.albumArt}
+                  alt=""
+                  width={40}
+                  height={40}
+                  className="rounded object-cover bg-gray-800"
                 />
                 <div className="flex-1 min-w-0">
                   <p
@@ -135,6 +144,27 @@ export default function SongList({
                   </Link>
                 ) : (
                   <span className="truncate">{song.artist}</span>
+                )}
+              </div>
+
+              {/* Like Button */}
+              <div className="w-10 flex items-center justify-center">
+                {showLikeButton && (
+                  <button
+                    onClick={(e) => handleLike(song, e)}
+                    className={`transition-colors ${
+                      isLiked(song.id)
+                        ? 'text-pink-500'
+                        : 'opacity-0 group-hover:opacity-100 text-gray-400 hover:text-pink-500'
+                    }`}
+                    title={isLiked(song.id) ? 'Unlike' : 'Like'}
+                  >
+                    {isLiked(song.id) ? (
+                      <HeartIcon className="w-5 h-5" />
+                    ) : (
+                      <HeartOutlineIcon className="w-5 h-5" />
+                    )}
+                  </button>
                 )}
               </div>
 
@@ -201,6 +231,22 @@ export default function SongList({
                   <RadioIcon className="w-5 h-5 text-gray-400 hover:text-pink-500" />
                 </button>
               </div>
+
+              {/* Remove (optional) */}
+              {onRemove && (
+                <div className="w-10 flex items-center justify-center">
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onRemove(song);
+                    }}
+                    className="opacity-0 group-hover:opacity-100 transition-opacity"
+                    title={removeTitle}
+                  >
+                    <XMarkIcon className="w-5 h-5 text-gray-400 hover:text-red-500" />
+                  </button>
+                </div>
+              )}
             </div>
           );
         })}

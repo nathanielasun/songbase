@@ -17,6 +17,7 @@ router = APIRouter()
 class SettingsPatch(BaseModel):
     pipeline: dict[str, Any] | None = None
     paths: dict[str, Any] | None = None
+    download_filename_format: str | None = None
 
 
 class ResetRequest(BaseModel):
@@ -56,6 +57,8 @@ async def update_settings(payload: SettingsPatch) -> dict[str, Any]:
         patch["pipeline"] = payload.pipeline
     if payload.paths is not None:
         patch["paths"] = payload.paths
+    if payload.download_filename_format is not None:
+        patch["download_filename_format"] = payload.download_filename_format
     return app_settings.update_settings(patch)
 
 

@@ -177,8 +177,69 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 - **Last seed timestamp**: The Sources view displays when the queue was last seeded.
 - **Queue cleanup**: The Downloads tab includes confirmation-protected controls to clear sources.jsonl entries or the pipeline queue.
 - **Local import**: The Manage Music tab lets you upload audio/video files from your computer and enqueue them directly for conversion and processing.
+
+## Search
+
+Navigate to **Search** (`/search`) from the sidebar to find content across your entire library:
+
+- **Songs**: Search by title, artist name, or album name
+- **Artists**: Search artists by name, view song counts, and start artist radio
+- **Albums**: Search albums by title or artist name, view release year and track counts
+- **Playlists**: Search your created playlists by name or description
+- **Genres**: Browse all genres or filter by name
+
+**Features:**
+- Category filters to focus on specific content types (All, Songs, Artists, Albums, Playlists, Genres)
+- Click on a genre to see all songs in that genre
+- Start artist radio directly from search results
+- When not searching, shows popular artists and albums from your library
+
+## Personalization Features
+
+### Like/Dislike System
+
+Songs can be liked or disliked using the heart icon:
+- **In the music player**: Click the heart next to the currently playing song
+- **In song lists**: Click the heart icon that appears on hover (or always visible if liked)
+
+Preferences are stored locally in your browser and are independent of the song metadata.
+
+### Liked Songs Playlist
+
+Your liked songs are automatically collected in a special **Liked Songs** playlist, accessible from the sidebar under the playlists section.
+
+**Features:**
+- Purple/pink gradient cover with heart icon
+- Shows total song count and duration
+- Play all liked songs with one click
+- Download all liked songs
+- Unlike songs directly from the playlist (removes them from the list)
+- Add songs to other playlists via the context menu
+
+The Liked Songs playlist updates automatically as you like/unlike songs throughout the app.
+
+### "For You" Radio
+
+Navigate to **For You** in the sidebar to access your personalized radio station.
+
+**How it works:**
+1. The algorithm computes the average embedding of your liked songs (attraction point)
+2. If you have disliked songs, it also computes their average embedding (repulsion point)
+3. For each candidate song, it calculates:
+   - Similarity to liked songs (positive factor)
+   - Dissimilarity to disliked songs (negative penalty)
+   - Final score = like_similarity - (dislike_weight × dislike_similarity)
+4. Songs are ranked by final score with diversity constraints to avoid too many songs from the same artist/album
+
+**Requirements:**
+- At least one liked song with embeddings
+- Songs must have VGGish embeddings computed
+
+## Additional UI Features
+
 - **Large uploads**: The Next.js dev proxy allows up to 5GB per import request via `experimental.proxyClientMaxBodySize`.
 - **Song metadata editor**: The Database tab lists stored songs with a right-side panel to view and edit metadata, including artist/profile links.
+- **Per-song verification**: Each catalog row includes a Verify button to re-run metadata matching for that specific song using the current verification settings.
 - **Album metadata sync**: Image/profile sync also caches album metadata + track lists for linking and browsing.
 - **Manual linking**: The Database tab lets you attach unassigned songs to existing album records.
 - **Artwork serving**: `/api/library/images/*` endpoints serve song, album, and artist artwork to the frontend.
@@ -214,11 +275,22 @@ The acquisition pipeline automatically queries available formats for each downlo
 
 - **Prefers audio-only formats** over video+audio to save bandwidth, storage, and conversion time
 - **Quality-aware selection**: Chooses the best audio quality up to 256kbps by default
-- **Automatic fallback**: Falls back to "bestaudio/best" if format selection fails
+- **Automatic fallback**: Falls back to flexible format string if format selection fails
 - **Configurable**: Set `SONGBASE_YTDLP_PREFER_AUDIO_ONLY=0` to disable audio-only preference
 - **Quality limit**: Set `SONGBASE_YTDLP_MAX_AUDIO_QUALITY=320` to prefer higher quality audio (in kbps)
 
-This eliminates "Requested format is not available" errors by adapting to each video's available formats.
+### Player Client Fallback
+
+When YouTube signature extraction fails (causing "Requested format is not available" or "Only images are available" errors), the pipeline automatically tries different YouTube player clients:
+
+- **android** - Android app client (often works when web client fails)
+- **ios** - iOS app client
+- **web** - Standard web client
+- **mediaconnect** - Media connect client
+
+The order of clients to try is configurable via `SONGBASE_YTDLP_PLAYER_CLIENTS` (comma-separated list, default: `default,android,ios,web,mediaconnect`). Set to empty string to disable fallback.
+
+This eliminates "Requested format is not available" errors by adapting to each video's available formats and extraction methods.
 
 ### Browser Cookie Authentication
 

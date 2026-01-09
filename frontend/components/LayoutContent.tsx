@@ -1,8 +1,9 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { ReactNode, useState, useMemo } from 'react';
 import { MusicPlayerProvider, useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { PlaylistProvider, usePlaylist } from '@/contexts/PlaylistContext';
+import { UserPreferencesProvider, useUserPreferences } from '@/contexts/UserPreferencesContext';
 import MusicPlayer from './MusicPlayer';
 import Sidebar from './Sidebar';
 import Queue from './Queue';
@@ -22,14 +23,24 @@ function PlayerWrapper() {
     playPrevious,
     toggleRepeat,
     toggleShuffle,
-    likeSong,
-    dislikeSong,
     handleSongEnd,
   } = useMusicPlayer();
 
+  const { likeSong, dislikeSong, isLiked, isDisliked } = useUserPreferences();
+
+  // Enrich current song with preference state
+  const enrichedCurrentSong = useMemo(() => {
+    if (!currentSong) return null;
+    return {
+      ...currentSong,
+      liked: isLiked(currentSong.id),
+      disliked: isDisliked(currentSong.id),
+    };
+  }, [currentSong, isLiked, isDisliked]);
+
   return (
     <MusicPlayer
-      currentSong={currentSong}
+      currentSong={enrichedCurrentSong}
       isPlaying={isPlaying}
       repeatMode={repeatMode}
       shuffleEnabled={shuffleEnabled}
@@ -102,10 +113,12 @@ function LayoutContentInner({ children }: { children: ReactNode }) {
 
 export default function LayoutContent({ children }: { children: ReactNode }) {
   return (
-    <PlaylistProvider>
-      <MusicPlayerProvider>
-        <LayoutContentInner>{children}</LayoutContentInner>
-      </MusicPlayerProvider>
-    </PlaylistProvider>
+    <UserPreferencesProvider>
+      <PlaylistProvider>
+        <MusicPlayerProvider>
+          <LayoutContentInner>{children}</LayoutContentInner>
+        </MusicPlayerProvider>
+      </PlaylistProvider>
+    </UserPreferencesProvider>
   );
 }

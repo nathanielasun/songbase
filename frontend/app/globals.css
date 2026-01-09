@@ -81,7 +81,7 @@ input[type='range'].volume-slider {
   appearance: none;
   background: transparent;
   cursor: pointer;
-  height: 4px;
+  height: 16px;
 }
 
 input[type='range'].volume-slider::-webkit-slider-runnable-track {
@@ -110,20 +110,30 @@ input[type='range'].volume-slider::-webkit-slider-thumb {
   -webkit-appearance: none;
   appearance: none;
   background: white;
-  height: 48px;
-  width: 48px;
+  height: 12px;
+  width: 12px;
   border-radius: 50%;
-  margin-top: -22px;
+  margin-top: -4px;
+  opacity: 0;
   transition: opacity 0.2s;
+}
+
+input[type='range'].volume-slider:hover::-webkit-slider-thumb {
+  opacity: 1;
 }
 
 input[type='range'].volume-slider::-moz-range-thumb {
   background: white;
-  height: 48px;
-  width: 48px;
+  height: 12px;
+  width: 12px;
   border-radius: 50%;
   border: none;
+  opacity: 0;
   transition: opacity 0.2s;
+}
+
+input[type='range'].volume-slider:hover::-moz-range-thumb {
+  opacity: 1;
 }
 
 /* Progress Slider - Hot Pink */

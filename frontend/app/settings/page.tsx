@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Cog8ToothIcon, FolderIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { ArrowDownTrayIcon, Cog8ToothIcon, FolderIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 
 type SettingsPayload = {
   pipeline: {
@@ -19,6 +19,7 @@ type SettingsPayload = {
     metadata_dir: string;
     song_cache_dir: string;
   };
+  download_filename_format?: string;
 };
 
 type ResetResponse = {
@@ -46,6 +47,7 @@ type FormState = {
   preprocessedCacheDir: string;
   metadataDir: string;
   songCacheDir: string;
+  downloadFilenameFormat: string;
 };
 
 const emptyForm: FormState = {
@@ -60,6 +62,7 @@ const emptyForm: FormState = {
   preprocessedCacheDir: '',
   metadataDir: '',
   songCacheDir: '',
+  downloadFilenameFormat: '{artist} - {title}',
 };
 
 export default function SettingsPage() {
@@ -99,6 +102,7 @@ export default function SettingsPage() {
           preprocessedCacheDir: data.paths.preprocessed_cache_dir ?? '',
           metadataDir: data.paths.metadata_dir ?? '',
           songCacheDir: data.paths.song_cache_dir ?? '',
+          downloadFilenameFormat: data.download_filename_format ?? '{artist} - {title}',
         });
       } catch (error) {
         setErrorMessage(error instanceof Error ? error.message : 'Failed to load settings.');
@@ -146,6 +150,7 @@ export default function SettingsPage() {
           metadata_dir: form.metadataDir.trim(),
           song_cache_dir: form.songCacheDir.trim(),
         },
+        download_filename_format: form.downloadFilenameFormat.trim(),
       };
       await fetchJson('/api/settings', {
         method: 'PUT',
@@ -378,6 +383,38 @@ export default function SettingsPage() {
               <p className="text-xs text-gray-500 mt-4">
                 Changes apply when the backend restarts or the next pipeline run begins.
               </p>
+            </section>
+
+            <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800 lg:col-span-2">
+              <div className="flex items-center gap-3">
+                <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                <h2 className="text-xl font-semibold">Download Settings</h2>
+              </div>
+              <p className="text-sm text-gray-400 mt-2">
+                Customize the filename format for downloaded songs. Use placeholders to include metadata.
+              </p>
+              <div className="mt-5">
+                <label className="text-sm text-gray-300">
+                  Filename format
+                  <input
+                    value={form.downloadFilenameFormat}
+                    onChange={(e) => setForm((prev) => ({ ...prev, downloadFilenameFormat: e.target.value }))}
+                    className="mt-2 w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
+                    placeholder="{artist} - {title}"
+                  />
+                </label>
+                <p className="text-xs text-gray-500 mt-2">
+                  Available placeholders: <code className="text-gray-400">{'{artist}'}</code>, <code className="text-gray-400">{'{title}'}</code>, <code className="text-gray-400">{'{album}'}</code>
+                </p>
+                <div className="mt-3 text-xs text-gray-500">
+                  <p className="font-semibold mb-1">Examples:</p>
+                  <ul className="space-y-1 ml-4">
+                    <li><code className="text-gray-400">{'{artist} - {title}'}</code> → Artist Name - Song Title.mp3</li>
+                    <li><code className="text-gray-400">{'{title} ({album})'}</code> → Song Title (Album Name).mp3</li>
+                    <li><code className="text-gray-400">{'{artist} - {album} - {title}'}</code> → Artist - Album - Title.mp3</li>
+                  </ul>
+                </div>
+              </div>
             </section>
 
             <section className="rounded-2xl bg-red-500/10 p-6 border border-red-500/30 lg:col-span-2">

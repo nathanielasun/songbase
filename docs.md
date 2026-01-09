@@ -129,6 +129,24 @@ songbase/
   - Enables seamless frontend-backend communication in development
   - Raises proxy body limit to 5GB for local file import uploads
 
+### frontend/app/search/page.tsx
+- **Purpose**: Unified search page for discovering songs, artists, albums, playlists, and genres
+- **Uses**:
+  - `/api/library/search?q=...` - Search songs by title, artist, album
+  - `/api/library/artists?q=...` - Search artists by name
+  - `/api/library/albums?q=...` - Search albums by title or artist
+  - `/api/library/genres` - Load all genres
+  - `/api/library/artists/popular` - Load popular artists (when no search query)
+  - `/api/library/albums/popular` - Load popular albums (when no search query)
+- **Features**:
+  - Category filters: All, Songs, Artists, Albums, Playlists, Genres
+  - Real-time search across all entity types
+  - Client-side playlist filtering from PlaylistContext
+  - Client-side genre filtering
+  - Genre click navigates to filtered song view
+  - Artist radio button on artist cards
+- **Notes**: Playlists are stored client-side in localStorage via PlaylistContext, so playlist search is client-side
+
 ### frontend/app/library/page.tsx
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
 - **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/sources`, `/api/library/sources/clear`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/acquisition/backends`
@@ -138,12 +156,41 @@ songbase/
 - **Notes**: "Run until queue is empty" checkbox automatically processes batches until all pending and processing items are stored or failed.
 - **Notes**: Acquisition backend panel allows configuring yt-dlp authentication with browser cookies for accessing age-restricted or member-only content.
 - **Notes**: Manage Music includes local file import (audio/video) via `/api/library/import`.
-- **Notes**: Database tab includes a song metadata editor with a right-side details panel and edit flow.
+- **Notes**: Database tab includes a song metadata editor with a right-side details panel, edit flow, and per-song metadata verification buttons.
 
 ### frontend/app/settings/page.tsx
 - **Purpose**: Settings UI for batch sizes, storage paths, and reset actions.
 - **Uses**: `/api/settings`, `/api/settings/reset`
 - **Notes**: Reset can clear embeddings, hashed music, and artist/album metadata + images.
+
+### frontend/app/radio/for-you/page.tsx
+- **Purpose**: Personalized radio based on user preferences (liked/disliked songs)
+- **Uses**: `/api/library/playlist/preferences` (POST)
+- **Notes**: Generates playlists by computing embedding centroids of liked songs and penalizing similarity to disliked songs
+
+### frontend/app/playlist/liked/page.tsx
+- **Purpose**: Dedicated playlist page for all liked songs
+- **Uses**: `/api/library/songs/{sha_id}` to fetch song details for each liked song ID
+- **Features**:
+  - Purple/pink gradient cover art with heart icon
+  - Total song count and duration display
+  - Play all button to start playback from first song
+  - Download all button to batch download liked songs
+  - Remove (unlike) songs directly from the playlist
+  - Add songs to other playlists via modal
+- **Notes**: Liked song IDs come from `UserPreferencesContext` (localStorage); song details are fetched from backend
+
+### frontend/contexts/UserPreferencesContext.tsx
+- **Purpose**: Client-side storage of user preferences (likes/dislikes)
+- **Storage**: `localStorage` with key `songbase_user_preferences`
+- **Key Functions**:
+  - `likeSong(songId)`: Toggle like status for a song
+  - `dislikeSong(songId)`: Toggle dislike status for a song
+  - `isLiked(songId)`: Check if song is liked
+  - `isDisliked(songId)`: Check if song is disliked
+  - `likedSongIds`: Array of all liked song IDs
+  - `dislikedSongIds`: Array of all disliked song IDs
+- **Notes**: Preferences are independent of song metadata and stored locally in the browser
 
 ### Usage Examples
 
@@ -213,6 +260,7 @@ try {
   - `GET /api/library/songs/unlinked`: List songs missing album or artist metadata
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
   - `PUT /api/library/songs/{sha_id}`: Update song metadata (title, artist, album, genre, release year, track number)
+  - `POST /api/library/songs/{sha_id}/verify`: Re-run metadata verification for a single song
   - `POST /api/library/songs/link`: Attach songs to an existing album record
   - `GET /api/library/albums`: List cached album metadata
   - `GET /api/library/albums/{album_id}`: Fetch album metadata + library songs
@@ -232,6 +280,10 @@ try {
   - `POST /api/library/pipeline/stop`: Request the active processing pipeline to stop after the current stage
   - `GET /api/library/pipeline/status`: Fetch pipeline status + recent events
   - `POST /api/library/metadata/stop`: Stop a running metadata task (`verification` or `images`)
+  - `GET /api/library/radio/song/{sha_id}`: Generate song radio playlist based on similarity
+  - `GET /api/library/radio/artist/{artist_id}`: Generate artist radio playlist based on average artist embedding
+  - `GET /api/library/similar/{sha_id}`: Find songs similar to a given song
+  - `POST /api/library/playlist/preferences`: Generate personalized playlist from liked/disliked songs
 - **Usage**:
   ```bash
   curl -X POST http://localhost:8000/api/library/queue \
@@ -240,10 +292,20 @@ try {
 
   curl http://localhost:8000/api/library/pipeline/status
 
+  # Verify metadata for a single song
+  curl -X POST http://localhost:8000/api/library/songs/{sha_id}/verify \
+    -H "Content-Type: application/json" \
+    -d '{"min_score": 85, "rate_limit": 1.0}'
+
   # Import local files
   curl -X POST http://localhost:8000/api/library/import \
     -F "files=@/path/to/song.mp3" \
     -F "files=@/path/to/video.mp4"
+
+  # Generate preference-based playlist
+  curl -X POST http://localhost:8000/api/library/playlist/preferences \
+    -H "Content-Type: application/json" \
+    -d '{"liked_song_ids":["sha_id_1","sha_id_2"],"disliked_song_ids":["sha_id_3"],"limit":50}'
   ```
 
 ### backend/api/routes/acquisition.py
@@ -417,6 +479,25 @@ try {
   python backend/processing/audio_pipeline/cli.py /path/to/wavs /path/to/tokens
   ```
 
+### backend/processing/similarity_pipeline/
+- **Purpose**: Song similarity search and playlist generation using VGGish embeddings
+- **Key Modules**:
+  - `config.py`: Configuration constants (radio size, similarity thresholds, diversity constraints)
+  - `similarity.py`: Similarity metrics (cosine, euclidean, dot product) and pgvector queries
+  - `pipeline.py`: High-level playlist generation functions
+- **Key Functions** (in `pipeline.py`):
+  - `get_song_embedding(sha_id)`: Fetch embedding for a song
+  - `generate_song_radio(sha_id, limit, metric, apply_diversity)`: Generate radio from a seed song
+  - `generate_artist_radio(artist_id, limit, metric, apply_diversity)`: Generate radio from artist's average embedding
+  - `find_similar_songs(sha_id, limit, metric)`: Find songs similar to a given song
+  - `generate_preference_playlist(liked_sha_ids, disliked_sha_ids, limit, metric, apply_diversity, dislike_weight)`: Generate personalized playlist using user preferences
+- **Preference Playlist Algorithm**:
+  1. Compute average embedding of liked songs (attraction centroid)
+  2. Compute average embedding of disliked songs (repulsion centroid)
+  3. For each candidate song: `score = like_similarity - (dislike_weight × dislike_similarity)`
+  4. Apply diversity constraints (max songs per artist/album)
+  5. Return top-scoring songs
+
 ### backend/processing/dependencies.py
 - **Purpose**: Central routine for ensuring local package dependencies (models, assets, binaries).
 - **Behavior**:
@@ -511,13 +592,15 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
     - **Dynamic cookies loading**: Checks stored acquisition settings first, then falls back to `SONGBASE_YTDLP_COOKIES_FILE` environment variable
     - **Backend authentication**: Supports browser cookie files for yt-dlp authentication
     - **Format selection preferences**: `YTDLP_PREFER_AUDIO_ONLY` (default: `True`), `YTDLP_MAX_AUDIO_QUALITY` (default: `256` kbps)
+    - **Player client configuration**: `YTDLP_PLAYER_CLIENTS` (default: `default,android,ios,web,mediaconnect`)
   - `db.py`: Download queue helpers (reads `metadata.download_queue`)
     - **Automatic cleanup**: Songs are automatically removed from the queue when they reach "stored" or "duplicate" status to prevent duplication
   - `downloader.py`: yt-dlp download worker
     - **Intelligent format selection**: Queries available formats first, then selects the best one
     - **Audio-only preference**: Prefers audio-only formats over video+audio to save bandwidth and conversion time
     - **Quality-aware**: Sorts by audio bitrate (up to max quality) and filesize
-    - **Automatic fallback**: Falls back to "bestaudio/best" if format selection fails
+    - **Player client fallback**: When signature extraction fails, tries multiple YouTube player clients (android, ios, web, mediaconnect)
+    - **Automatic fallback**: Falls back to flexible format string if no specific format can be selected
     - **Format detection**: Detects if downloaded file needs audio conversion (videos, non-MP3 audio)
   - `discovery.py`: Song list discovery + sources.jsonl writer (no downloads)
   - `discovery_providers.py`: External discovery routines (MusicBrainz, hotlists)

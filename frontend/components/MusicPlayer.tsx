@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import Link from 'next/link';
 import {
   PlayIcon,
   PauseIcon,
@@ -311,29 +312,34 @@ export default function MusicPlayer({
       <div className="h-24 bg-gray-900 border-t border-gray-800 px-4 flex items-center justify-between">
       {/* Song Info with Like/Dislike */}
       <div className="flex items-center gap-4 w-1/4">
-        {currentSong.albumArt ? (
-          <img
-            src={currentSong.albumArt}
-            alt=""
-            width={56}
-            height={56}
-            className="rounded object-cover bg-gray-800"
-            onError={(e) => {
-              e.currentTarget.style.display = 'none';
-              const placeholder = e.currentTarget.nextElementSibling;
-              if (placeholder) {
-                (placeholder as HTMLElement).style.display = 'block';
-              }
-            }}
-          />
-        ) : null}
-        <div
-          className="w-14 h-14 rounded bg-gray-800 flex-shrink-0"
-          style={{ display: currentSong.albumArt ? 'none' : 'block' }}
+        <img
+          src={currentSong.albumArt}
+          alt=""
+          width={56}
+          height={56}
+          className="rounded object-cover bg-gray-800"
         />
         <div className="flex-1 min-w-0">
-          <p className="text-white text-sm font-semibold truncate">{currentSong.title}</p>
-          <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
+          {currentSong.albumId ? (
+            <Link
+              href={`/album/${currentSong.albumId}`}
+              className="text-white text-sm font-semibold truncate block hover:underline"
+            >
+              {currentSong.title}
+            </Link>
+          ) : (
+            <p className="text-white text-sm font-semibold truncate">{currentSong.title}</p>
+          )}
+          {currentSong.artistId ? (
+            <Link
+              href={`/artist/${currentSong.artistId}`}
+              className="text-gray-400 text-xs truncate block hover:text-white hover:underline"
+            >
+              {currentSong.artist}
+            </Link>
+          ) : (
+            <p className="text-gray-400 text-xs truncate">{currentSong.artist}</p>
+          )}
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -463,7 +469,7 @@ export default function MusicPlayer({
       </div>
 
       {/* Volume Control */}
-      <div className="flex items-center gap-2 w-1/4 justify-end">
+      <div className="flex items-center gap-3 w-1/4 justify-end">
         <button onClick={toggleMute} className="text-gray-400 hover:text-white transition-colors">
           {isMuted || volume === 0 ? (
             <SpeakerXMarkIcon className="w-5 h-5" />
@@ -477,7 +483,7 @@ export default function MusicPlayer({
           max="100"
           value={isMuted ? 0 : volume}
           onChange={handleVolumeChange}
-          className="w-6 volume-slider"
+          className="w-48 volume-slider"
           style={{ '--volume-width': `${isMuted ? 0 : volume}%` } as React.CSSProperties}
         />
       </div>

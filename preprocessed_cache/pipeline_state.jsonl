@@ -1769,3 +1769,97 @@
 {"stage": "queue_empty", "ts": "2026-01-08T18:19:52.215443Z"}
 {"stage": "start", "ts": "2026-01-08T18:35:30.180594Z"}
 {"stage": "start", "ts": "2026-01-09T02:39:01.249114Z"}
+{"stage": "start", "ts": "2026-01-09T04:33:00.912545Z"}
+{"stage": "stop_requested", "ts": "2026-01-09T04:35:42.478673Z"}
+{"stage": "finished", "ts": "2026-01-09T04:35:42.479718Z"}
+{"stage": "start", "ts": "2026-01-09T04:43:10.408912Z"}
+{"download_id": 13837, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13837.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:43:38.130910Z"}
+{"download_id": 13837, "sha_id": "fcf5d858cdf0328ee018cc7d21b9d87c1f2983ee71490d792ba487cccbb035df", "stage": "hashed", "ts": "2026-01-09T04:43:43.686852Z"}
+{"download_id": 13837, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13837.npz", "stage": "embedded", "ts": "2026-01-09T04:43:52.641128Z"}
+{"download_id": 13837, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/fc/fcf5d858cdf0328ee018cc7d21b9d87c1f2983ee71490d792ba487cccbb035df.mp3", "sha_id": "fcf5d858cdf0328ee018cc7d21b9d87c1f2983ee71490d792ba487cccbb035df", "stage": "stored", "ts": "2026-01-09T04:43:55.220410Z"}
+{"stage": "stop_requested", "ts": "2026-01-09T04:48:24.349279Z"}
+{"stage": "finished", "ts": "2026-01-09T04:48:24.350151Z"}
+{"stage": "start", "ts": "2026-01-09T04:48:29.150514Z"}
+{"download_id": 13841, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13841.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:29.877592Z"}
+{"download_id": 13839, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13839.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:29.909267Z"}
+{"download_id": 13842, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13842.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:30.297938Z"}
+{"download_id": 13840, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13840.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:30.382014Z"}
+{"download_id": 13843, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13843.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:30.622232Z"}
+{"download_id": 13844, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13844.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:30.851785Z"}
+{"download_id": 13845, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13845.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:30.951668Z"}
+{"download_id": 13847, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13847.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:31.219269Z"}
+{"download_id": 13846, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13846.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:31.309589Z"}
+{"download_id": 13838, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13838.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:50:31.578328Z"}
+{"download_id": 13841, "sha_id": "73da68aa3b5f813c1c6e8194e4d54511bec2e6ddf264dd83cd9b9df2cfa75e33", "stage": "hashed", "ts": "2026-01-09T04:50:35.590236Z"}
+{"download_id": 13839, "sha_id": "2de873eab7c3479e089747d72bf9a31caf4fcf94e2fa26c91bcffb6201cd4680", "stage": "hashed", "ts": "2026-01-09T04:50:36.293793Z"}
+{"download_id": 13842, "sha_id": "8b77809df10b17df283d52d1cfdf0d6d9371ce5a5cf07473ae7f33b32a7dca81", "stage": "hashed", "ts": "2026-01-09T04:50:41.619910Z"}
+{"download_id": 13840, "sha_id": "0528c2eccc1cebe045ee5b3578304177066bc688b9c49855f5a2bd07e103edf8", "stage": "hashed", "ts": "2026-01-09T04:50:43.993090Z"}
+{"download_id": 13843, "sha_id": "e3f02215c162fffa58fa92f823c69bf64ffa43a9a221af867d15ac46ad4ea9e6", "stage": "hashed", "ts": "2026-01-09T04:50:44.898343Z"}
+{"download_id": 13845, "sha_id": "92494b4f80c3c252d31180d88b69941c3db65a9931077926898da5487faf691c", "stage": "hashed", "ts": "2026-01-09T04:50:49.821866Z"}
+{"download_id": 13844, "sha_id": "b3480db38c39b64e539707800fc8664971b36790f7e22e5e917910bb10ebd4af", "stage": "hashed", "ts": "2026-01-09T04:50:50.974867Z"}
+{"download_id": 13847, "sha_id": "bb2c387cbf7ece51deb85a8ebf7a1cf242b46ad6cc198675f80af02bbbe6f874", "stage": "hashed", "ts": "2026-01-09T04:50:52.402508Z"}
+{"download_id": 13846, "sha_id": "463b1a52819a7752b2d680b2b043f5577b9beb58a4aaed00622fa3d7ef9054bd", "stage": "hashed", "ts": "2026-01-09T04:50:56.793849Z"}
+{"download_id": 13838, "sha_id": "58dc9d9c470716dba75780cb9a6431a6320195f66c762b58969ec46a9e1a981f", "stage": "hashed", "ts": "2026-01-09T04:50:57.539440Z"}
+{"download_id": 13839, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13839.npz", "stage": "embedded", "ts": "2026-01-09T04:50:57.548857Z"}
+{"download_id": 13842, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13842.npz", "stage": "embedded", "ts": "2026-01-09T04:50:57.554778Z"}
+{"download_id": 13841, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13841.npz", "stage": "embedded", "ts": "2026-01-09T04:50:57.559692Z"}
+{"download_id": 13840, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13840.npz", "stage": "embedded", "ts": "2026-01-09T04:51:05.378361Z"}
+{"download_id": 13843, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13843.npz", "stage": "embedded", "ts": "2026-01-09T04:51:09.635360Z"}
+{"download_id": 13844, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13844.npz", "stage": "embedded", "ts": "2026-01-09T04:51:16.605069Z"}
+{"download_id": 13845, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13845.npz", "stage": "embedded", "ts": "2026-01-09T04:51:20.755704Z"}
+{"download_id": 13847, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13847.npz", "stage": "embedded", "ts": "2026-01-09T04:51:23.866203Z"}
+{"download_id": 13846, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13846.npz", "stage": "embedded", "ts": "2026-01-09T04:51:29.990301Z"}
+{"download_id": 13838, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13838.npz", "stage": "embedded", "ts": "2026-01-09T04:51:35.288887Z"}
+{"download_id": 13841, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/73/73da68aa3b5f813c1c6e8194e4d54511bec2e6ddf264dd83cd9b9df2cfa75e33.mp3", "sha_id": "73da68aa3b5f813c1c6e8194e4d54511bec2e6ddf264dd83cd9b9df2cfa75e33", "stage": "stored", "ts": "2026-01-09T04:51:37.216592Z"}
+{"download_id": 13839, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/2d/2de873eab7c3479e089747d72bf9a31caf4fcf94e2fa26c91bcffb6201cd4680.mp3", "sha_id": "2de873eab7c3479e089747d72bf9a31caf4fcf94e2fa26c91bcffb6201cd4680", "stage": "stored", "ts": "2026-01-09T04:51:38.339679Z"}
+{"download_id": 13842, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/8b/8b77809df10b17df283d52d1cfdf0d6d9371ce5a5cf07473ae7f33b32a7dca81.mp3", "sha_id": "8b77809df10b17df283d52d1cfdf0d6d9371ce5a5cf07473ae7f33b32a7dca81", "stage": "stored", "ts": "2026-01-09T04:51:39.655510Z"}
+{"download_id": 13840, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/05/0528c2eccc1cebe045ee5b3578304177066bc688b9c49855f5a2bd07e103edf8.mp3", "sha_id": "0528c2eccc1cebe045ee5b3578304177066bc688b9c49855f5a2bd07e103edf8", "stage": "stored", "ts": "2026-01-09T04:51:41.066565Z"}
+{"download_id": 13843, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/e3/e3f02215c162fffa58fa92f823c69bf64ffa43a9a221af867d15ac46ad4ea9e6.mp3", "sha_id": "e3f02215c162fffa58fa92f823c69bf64ffa43a9a221af867d15ac46ad4ea9e6", "stage": "stored", "ts": "2026-01-09T04:51:41.763223Z"}
+{"download_id": 13844, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/b3/b3480db38c39b64e539707800fc8664971b36790f7e22e5e917910bb10ebd4af.mp3", "sha_id": "b3480db38c39b64e539707800fc8664971b36790f7e22e5e917910bb10ebd4af", "stage": "stored", "ts": "2026-01-09T04:51:42.866789Z"}
+{"download_id": 13845, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/92/92494b4f80c3c252d31180d88b69941c3db65a9931077926898da5487faf691c.mp3", "sha_id": "92494b4f80c3c252d31180d88b69941c3db65a9931077926898da5487faf691c", "stage": "stored", "ts": "2026-01-09T04:51:43.659394Z"}
+{"download_id": 13846, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/46/463b1a52819a7752b2d680b2b043f5577b9beb58a4aaed00622fa3d7ef9054bd.mp3", "sha_id": "463b1a52819a7752b2d680b2b043f5577b9beb58a4aaed00622fa3d7ef9054bd", "stage": "stored", "ts": "2026-01-09T04:51:44.799669Z"}
+{"download_id": 13847, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/bb/bb2c387cbf7ece51deb85a8ebf7a1cf242b46ad6cc198675f80af02bbbe6f874.mp3", "sha_id": "bb2c387cbf7ece51deb85a8ebf7a1cf242b46ad6cc198675f80af02bbbe6f874", "stage": "stored", "ts": "2026-01-09T04:51:45.266570Z"}
+{"download_id": 13838, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/58/58dc9d9c470716dba75780cb9a6431a6320195f66c762b58969ec46a9e1a981f.mp3", "sha_id": "58dc9d9c470716dba75780cb9a6431a6320195f66c762b58969ec46a9e1a981f", "stage": "stored", "ts": "2026-01-09T04:51:46.228930Z"}
+{"stage": "batch_2_start", "ts": "2026-01-09T04:51:46.790490Z"}
+{"download_id": 13850, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13850.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:04.715989Z"}
+{"download_id": 13851, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13851.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:04.759298Z"}
+{"download_id": 13849, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13849.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:04.973317Z"}
+{"download_id": 13852, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13852.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:05.089546Z"}
+{"download_id": 13855, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13855.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:05.217991Z"}
+{"download_id": 13854, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13854.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:05.386120Z"}
+{"download_id": 13856, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13856.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:05.747691Z"}
+{"download_id": 13848, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13848.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:07.287219Z"}
+{"download_id": 13857, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13857.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:07.759903Z"}
+{"download_id": 13853, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/preprocessed_cache/pcm_raw/13853.wav", "stage": "pcm_raw_ready", "ts": "2026-01-09T04:55:11.370976Z"}
+{"download_id": 13850, "sha_id": "974e82f37fd1245f3d250c4807703cf5bef9bc2f236977aa078e8eebb65298da", "stage": "hashed", "ts": "2026-01-09T04:55:11.384063Z"}
+{"download_id": 13851, "sha_id": "286e04a508ee077cd23ed06373310847b5409836af583b8d7b9f72804564db68", "stage": "hashed", "ts": "2026-01-09T04:55:11.393686Z"}
+{"download_id": 13849, "sha_id": "24472f5d4cbb784f9bcd0b7cfaf131b70f6bb9e5f2d296ea623282ee6f9d4b0a", "stage": "hashed", "ts": "2026-01-09T04:55:12.403796Z"}
+{"download_id": 13855, "sha_id": "d2f213110617737c1ea9edb7d16b23c3e9e128459550a9b60a28f93af1e95f20", "stage": "hashed", "ts": "2026-01-09T04:55:15.480101Z"}
+{"download_id": 13852, "sha_id": "5a8220e31cb3798ac2081f115ead590a6e9ed4313c0cf56e42feccc5c1b1fbe3", "stage": "hashed", "ts": "2026-01-09T04:55:15.962959Z"}
+{"download_id": 13854, "sha_id": "b30da35416a78f0441c8109e2735546a689c9c7bd63f4913c9bd4e352f0d564e", "stage": "hashed", "ts": "2026-01-09T04:55:19.929713Z"}
+{"download_id": 13856, "sha_id": "c2126b01ba490013567e79bf6315ad01a1a6e878bc193520237923a60ffebea5", "stage": "hashed", "ts": "2026-01-09T04:55:24.377487Z"}
+{"download_id": 13857, "sha_id": "f4ba1173179372ba59454ec4423be558b3d642dc9100de6a27c86dbd20e5cf03", "stage": "hashed", "ts": "2026-01-09T04:55:29.636439Z"}
+{"download_id": 13848, "sha_id": "f614bbd56568d225c1a0613eb695c97b5db7b91c70dc4e8116c8cafd21766564", "stage": "hashed", "ts": "2026-01-09T04:55:49.607855Z"}
+{"download_id": 13853, "sha_id": "3196d244f658ebb6807ba48d800e05d5c6cf934d7133b0d4e452dedaae7612ee", "stage": "hashed", "ts": "2026-01-09T04:56:52.819580Z"}
+{"download_id": 13854, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13854.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.832275Z"}
+{"download_id": 13857, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13857.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.837278Z"}
+{"download_id": 13855, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13855.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.843616Z"}
+{"download_id": 13850, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13850.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.848664Z"}
+{"download_id": 13852, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13852.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.855368Z"}
+{"download_id": 13851, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13851.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.860313Z"}
+{"download_id": 13856, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13856.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.866756Z"}
+{"download_id": 13849, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13849.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.872605Z"}
+{"download_id": 13848, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13848.npz", "stage": "embedded", "ts": "2026-01-09T04:56:52.877659Z"}
+{"download_id": 13853, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.embeddings/13853.npz", "stage": "embedded", "ts": "2026-01-09T04:58:42.602365Z"}
+{"download_id": 13850, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/97/974e82f37fd1245f3d250c4807703cf5bef9bc2f236977aa078e8eebb65298da.mp3", "sha_id": "974e82f37fd1245f3d250c4807703cf5bef9bc2f236977aa078e8eebb65298da", "stage": "stored", "ts": "2026-01-09T04:58:45.244009Z"}
+{"download_id": 13851, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/28/286e04a508ee077cd23ed06373310847b5409836af583b8d7b9f72804564db68.mp3", "sha_id": "286e04a508ee077cd23ed06373310847b5409836af583b8d7b9f72804564db68", "stage": "stored", "ts": "2026-01-09T04:58:46.236687Z"}
+{"download_id": 13852, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/5a/5a8220e31cb3798ac2081f115ead590a6e9ed4313c0cf56e42feccc5c1b1fbe3.mp3", "sha_id": "5a8220e31cb3798ac2081f115ead590a6e9ed4313c0cf56e42feccc5c1b1fbe3", "stage": "stored", "ts": "2026-01-09T04:58:47.287883Z"}
+{"download_id": 13849, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/24/24472f5d4cbb784f9bcd0b7cfaf131b70f6bb9e5f2d296ea623282ee6f9d4b0a.mp3", "sha_id": "24472f5d4cbb784f9bcd0b7cfaf131b70f6bb9e5f2d296ea623282ee6f9d4b0a", "stage": "stored", "ts": "2026-01-09T04:58:47.963156Z"}
+{"download_id": 13855, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/d2/d2f213110617737c1ea9edb7d16b23c3e9e128459550a9b60a28f93af1e95f20.mp3", "sha_id": "d2f213110617737c1ea9edb7d16b23c3e9e128459550a9b60a28f93af1e95f20", "stage": "stored", "ts": "2026-01-09T04:58:48.517040Z"}
+{"download_id": 13854, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/b3/b30da35416a78f0441c8109e2735546a689c9c7bd63f4913c9bd4e352f0d564e.mp3", "sha_id": "b30da35416a78f0441c8109e2735546a689c9c7bd63f4913c9bd4e352f0d564e", "stage": "stored", "ts": "2026-01-09T04:58:49.126246Z"}
+{"download_id": 13856, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/c2/c2126b01ba490013567e79bf6315ad01a1a6e878bc193520237923a60ffebea5.mp3", "sha_id": "c2126b01ba490013567e79bf6315ad01a1a6e878bc193520237923a60ffebea5", "stage": "stored", "ts": "2026-01-09T04:58:50.307498Z"}
+{"download_id": 13848, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/f6/f614bbd56568d225c1a0613eb695c97b5db7b91c70dc4e8116c8cafd21766564.mp3", "sha_id": "f614bbd56568d225c1a0613eb695c97b5db7b91c70dc4e8116c8cafd21766564", "stage": "stored", "ts": "2026-01-09T04:58:54.261995Z"}
+{"download_id": 13853, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/31/3196d244f658ebb6807ba48d800e05d5c6cf934d7133b0d4e452dedaae7612ee.mp3", "sha_id": "3196d244f658ebb6807ba48d800e05d5c6cf934d7133b0d4e452dedaae7612ee", "stage": "stored", "ts": "2026-01-09T04:59:06.316307Z"}
+{"download_id": 13857, "path": "/Users/nathaniel.sun/Desktop/programming/python/songbase/.song_cache/f4/f4ba1173179372ba59454ec4423be558b3d642dc9100de6a27c86dbd20e5cf03.mp3", "sha_id": "f4ba1173179372ba59454ec4423be558b3d642dc9100de6a27c86dbd20e5cf03", "stage": "stored", "ts": "2026-01-09T04:59:07.172554Z"}
+{"stage": "batch_3_start", "ts": "2026-01-09T04:59:08.771597Z"}
+{"stage": "queue_empty", "ts": "2026-01-09T05:12:53.297052Z"}

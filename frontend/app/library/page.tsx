@@ -19,6 +19,9 @@ import { PlayIcon } from '@heroicons/react/24/solid';
 import { CollapsibleSection } from './components/CollapsibleSection';
 import { CollapsiblePanel } from './components/CollapsiblePanel';
 
+// Direct backend URL for SSE connections (bypasses Next.js proxy which can buffer streams)
+const SSE_BACKEND_URL = process.env.NEXT_PUBLIC_SSE_BACKEND_URL || 'http://localhost:8000';
+
 type QueueItem = {
   queue_id: number;
   title: string;
@@ -289,6 +292,7 @@ export default function LibraryPage() {
   const [songSaveBusy, setSongSaveBusy] = useState(false);
   const [songSaveMessage, setSongSaveMessage] = useState<string | null>(null);
   const [songSaveError, setSongSaveError] = useState<string | null>(null);
+  const [songVerifyBusy, setSongVerifyBusy] = useState<Record<string, boolean>>({});
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
   const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(true);
   const [isBackendCollapsed, setIsBackendCollapsed] = useState(true);
@@ -1009,6 +1013,44 @@ export default function LibraryPage() {
     }
   };
 
+  const handleVerifySong = async (shaId: string, title?: string | null) => {
+    setActionMessage(null);
+    setActionError(null);
+    const minScore = parseOptionalNumber(verifyForm.minScore);
+    const rateLimit = parseOptionalNumber(verifyForm.rateLimit);
+    if (
+      (verifyForm.minScore.trim() && minScore === null) ||
+      (verifyForm.rateLimit.trim() && rateLimit === null)
+    ) {
+      setActionError('Verification settings must be valid numbers.');
+      return;
+    }
+    setSongVerifyBusy((prev) => ({ ...prev, [shaId]: true }));
+    setCurrentVerificationStatus(
+      `Starting metadata verification for ${title || 'selected song'}...`
+    );
+    setMetadataBusy(true);
+    try {
+      const payload: Record<string, unknown> = { dry_run: verifyForm.dryRun };
+      if (minScore !== null) payload.min_score = minScore;
+      if (rateLimit !== null) payload.rate_limit = rateLimit;
+      await fetchJson(`/api/library/songs/${shaId}/verify`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+      setActionMessage(`Verification started for ${title || 'song'}.`);
+      await refreshMetadataStatus();
+      setCurrentVerificationStatus(null);
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to start verification.'
+      );
+    } finally {
+      setSongVerifyBusy((prev) => ({ ...prev, [shaId]: false }));
+      setMetadataBusy(false);
+    }
+  };
+
   const importTotalBytes = useMemo(
     () => importFiles.reduce((sum, file) => sum + file.size, 0),
     [importFiles]
@@ -1266,7 +1308,8 @@ export default function LibraryPage() {
       if (limit !== null) params.set('limit', limit.toString());
       if (minScore !== null) params.set('min_score', minScore.toString());
 
-      const url = `/api/processing/metadata/verify-stream${params.toString() ? `?${params.toString()}` : ''}`;
+      // Use direct backend URL for SSE to avoid Next.js proxy buffering
+      const url = `${SSE_BACKEND_URL}/api/processing/metadata/verify-stream${params.toString() ? `?${params.toString()}` : ''}`;
 
       // Connect to SSE endpoint
       if (verificationStreamRef.current) {
@@ -2525,7 +2568,7 @@ export default function LibraryPage() {
                               <th className="py-2 pr-4">Artist</th>
                               <th className="py-2 pr-4">Album</th>
                               <th className="py-2 pr-4">Status</th>
-                              <th className="py-2 pr-2 text-right">Info</th>
+                              <th className="py-2 pr-2 text-right">Actions</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -2538,6 +2581,12 @@ export default function LibraryPage() {
                             )}
                             {catalogItems.map((item) => {
                               const selected = item.sha_id === selectedSongId;
+                              const verifyBusy = Boolean(songVerifyBusy[item.sha_id]);
+                              const disableVerify =
+                                verifyBusy ||
+                                metadataBusy ||
+                                metadataStatus.verification.running ||
+                                verificationInProgress;
                               return (
                                 <tr
                                   key={item.sha_id}
@@ -2571,13 +2620,25 @@ export default function LibraryPage() {
                                     </span>
                                   </td>
                                   <td className="py-3 pr-2 text-right">
-                                    <button
-                                      onClick={() => handleSelectSong(item.sha_id)}
-                                      className="inline-flex items-center justify-center rounded-full border border-gray-700 p-2 text-gray-300 hover:border-gray-500 hover:text-white"
-                                      title="View song info"
-                                    >
-                                      <InformationCircleIcon className="h-4 w-4" />
-                                    </button>
+                                    <div className="flex items-center justify-end gap-2">
+                                      <button
+                                        onClick={() => handleVerifySong(item.sha_id, item.title)}
+                                        disabled={disableVerify}
+                                        className="inline-flex items-center justify-center rounded-full border border-gray-700 p-2 text-gray-300 hover:border-gray-500 hover:text-white disabled:opacity-50"
+                                        title="Verify metadata"
+                                      >
+                                        <ArrowPathIcon
+                                          className={`h-4 w-4 ${verifyBusy ? 'animate-spin' : ''}`}
+                                        />
+                                      </button>
+                                      <button
+                                        onClick={() => handleSelectSong(item.sha_id)}
+                                        className="inline-flex items-center justify-center rounded-full border border-gray-700 p-2 text-gray-300 hover:border-gray-500 hover:text-white"
+                                        title="View song info"
+                                      >
+                                        <InformationCircleIcon className="h-4 w-4" />
+                                      </button>
+                                    </div>
                                   </td>
                                 </tr>
                               );

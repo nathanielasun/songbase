@@ -3,10 +3,14 @@ from __future__ import annotations
 import datetime as dt
 import difflib
 import hashlib
+import io
 import json
 import re
+import shutil
 import string
+import tempfile
 import threading
+import zipfile
 from collections import deque
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
@@ -26,8 +30,12 @@ from backend.processing.acquisition_pipeline import importer as acquisition_impo
 from backend.processing.acquisition_pipeline import sources as acquisition_sources
 from backend.processing.audio_pipeline import config as vggish_config
 from backend.processing.metadata_pipeline.image_pipeline import sync_images_and_profiles
-from backend.processing.metadata_pipeline.pipeline import verify_unverified_songs
+from backend.processing.metadata_pipeline.pipeline import (
+    verify_songs_by_sha_ids,
+    verify_unverified_songs,
+)
 from backend.processing.storage_utils import song_cache_path
+from backend.processing.metadata_pipeline.id3_writer import write_id3_tags
 
 router = APIRouter()
 
@@ -117,6 +125,12 @@ class CatalogEntry(BaseModel):
 
 class VerifyMetadataRequest(BaseModel):
     limit: int | None = None
+    min_score: int | None = None
+    rate_limit: float | None = None
+    dry_run: bool = False
+
+
+class VerifySongRequest(BaseModel):
     min_score: int | None = None
     rate_limit: float | None = None
     dry_run: bool = False
@@ -566,6 +580,17 @@ def _fetch_image_bytes(query: str, params: tuple[Any, ...]) -> tuple[bytes, str]
             if not image_bytes:
                 return None
             return image_bytes, (mime_type or "application/octet-stream")
+
+
+def _get_placeholder_image() -> tuple[bytes, str]:
+    """Return a 1x1 transparent PNG as placeholder."""
+    # 1x1 transparent PNG (67 bytes)
+    placeholder_png = bytes.fromhex(
+        "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4"
+        "890000000a49444154789c6300010000050001"
+        "0d0a2db40000000049454e44ae426082"
+    )
+    return placeholder_png, "image/png"
 
 
 def _resolve_song_file(sha_id: str) -> Path | None:
@@ -1573,6 +1598,45 @@ async def get_song(sha_id: str) -> dict[str, Any]:
     return detail
 
 
+@router.post("/songs/{sha_id}/verify")
+async def verify_song_metadata(sha_id: str, payload: VerifySongRequest) -> dict[str, Any]:
+    normalized = _normalize_sha_id(sha_id)
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT title FROM metadata.songs WHERE sha_id = %s",
+                (normalized,),
+            )
+            row = cur.fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Song not found.")
+
+    config = {
+        "sha_id": normalized,
+        "min_score": payload.min_score,
+        "rate_limit": payload.rate_limit,
+        "dry_run": payload.dry_run,
+    }
+
+    def _runner(
+        stop_event: threading.Event,
+        status_callback: Callable[[str], None] | None,
+    ) -> Any:
+        return verify_songs_by_sha_ids(
+            [normalized],
+            min_score=payload.min_score,
+            rate_limit_seconds=payload.rate_limit,
+            dry_run=payload.dry_run,
+            stop_event=stop_event,
+            status_callback=status_callback,
+        )
+
+    result = _start_metadata_task("verification", config, _runner)
+    result["sha_id"] = normalized
+    result["title"] = row[0]
+    return result
+
+
 @router.put("/songs/{sha_id}")
 async def update_song(sha_id: str, payload: SongUpdateRequest) -> dict[str, Any]:
     sha_id = _normalize_sha_id(sha_id)
@@ -1805,6 +1869,357 @@ async def stream_song(sha_id: str, request: Request):
     )
 
 
+def _get_song_metadata_for_download(sha_id: str) -> dict[str, Any]:
+    """Get full song metadata for download with ID3 tags."""
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    s.title,
+                    s.album,
+                    s.release_year,
+                    s.track_number,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT a.name)
+                        FILTER (WHERE a.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT g.name)
+                        FILTER (WHERE g.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS genres
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+                LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+                LEFT JOIN metadata.song_genres sg ON sg.sha_id = s.sha_id
+                LEFT JOIN metadata.genres g ON g.genre_id = sg.genre_id
+                WHERE s.sha_id = %s
+                GROUP BY s.sha_id
+                """,
+                (sha_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return {}
+
+            return {
+                "title": row[0],
+                "album": row[1],
+                "year": row[2],
+                "track_number": row[3],
+                "artists": list(row[4]) if row[4] else [],
+                "genres": list(row[5]) if row[5] else [],
+            }
+
+
+def _get_song_cover_art(sha_id: str) -> tuple[bytes | None, str]:
+    """Get cover art for a song."""
+    try:
+        with get_image_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT ia.image_bytes, ia.mime_type
+                    FROM media.song_images si
+                    JOIN media.image_assets ia ON ia.image_id = si.image_id
+                    WHERE si.song_sha_id = %s AND si.image_type = 'cover'
+                    ORDER BY si.created_at DESC
+                    LIMIT 1
+                    """,
+                    (sha_id,),
+                )
+                row = cur.fetchone()
+                if row:
+                    return row[0], row[1] or "image/jpeg"
+    except Exception:
+        pass
+    return None, "image/jpeg"
+
+
+def _create_tagged_song_file(sha_id: str, source_path: Path) -> Path:
+    """Create a temporary MP3 file with ID3 tags from database metadata."""
+    metadata = _get_song_metadata_for_download(sha_id)
+    if not metadata:
+        # Return original file if no metadata
+        return source_path
+
+    cover_art, cover_mime = _get_song_cover_art(sha_id)
+
+    # Create temp directory and file
+    temp_dir = tempfile.mkdtemp(prefix="songbase_download_")
+    temp_path = Path(temp_dir) / "song.mp3"
+    shutil.copy2(source_path, temp_path)
+
+    # Write ID3 tags
+    artist_str = ", ".join(metadata["artists"]) if metadata["artists"] else None
+    write_id3_tags(
+        temp_path,
+        title=metadata.get("title"),
+        artist=artist_str,
+        album_artist=metadata["artists"][0] if metadata["artists"] else None,
+        album=metadata.get("album"),
+        year=metadata.get("year"),
+        track_number=metadata.get("track_number"),
+        genres=metadata.get("genres") if metadata.get("genres") else None,
+        cover_art=cover_art,
+        cover_art_mime=cover_mime,
+    )
+
+    return temp_path
+
+
+def _sanitize_filename(name: str) -> str:
+    """Sanitize a string for use as a filename."""
+    return "".join(c if c.isalnum() or c in " -_()[]" else "_" for c in name).strip()
+
+
+@router.get("/download/song/{sha_id}")
+async def download_song(sha_id: str) -> Response:
+    """Download a song file with formatted filename and ID3 metadata."""
+    normalized = _normalize_sha_id(sha_id)
+
+    # Get song metadata
+    metadata = _get_song_metadata_for_download(normalized)
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    # Resolve song file
+    song_file = _resolve_song_file(normalized)
+    if not song_file or not song_file.exists():
+        raise HTTPException(status_code=404, detail="Song file not found")
+
+    # Create tagged version
+    tagged_file = _create_tagged_song_file(normalized, song_file)
+
+    # Load settings for filename format
+    settings = app_settings.load_settings()
+    download_format = settings.get("download_filename_format", "{artist} - {title}")
+
+    # Format filename
+    artist_str = ", ".join(metadata["artists"]) if metadata["artists"] else "Unknown Artist"
+    filename_parts = {
+        "artist": artist_str,
+        "title": metadata.get("title") or "Unknown Title",
+        "album": metadata.get("album") or "",
+    }
+
+    try:
+        filename = download_format.format(**filename_parts)
+        filename = _sanitize_filename(filename) + ".mp3"
+    except KeyError:
+        filename = _sanitize_filename(f"{artist_str} - {metadata.get('title')}") + ".mp3"
+
+    # Read file content
+    content = tagged_file.read_bytes()
+
+    # Cleanup temp file
+    if tagged_file != song_file:
+        try:
+            shutil.rmtree(tagged_file.parent)
+        except Exception:
+            pass
+
+    return Response(
+        content=content,
+        media_type="audio/mpeg",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"',
+            "Content-Length": str(len(content)),
+        },
+    )
+
+
+class DownloadSongsRequest(BaseModel):
+    """Request body for downloading multiple songs as a zip."""
+    song_ids: list[str]
+    archive_name: str = "songs"
+
+
+@router.post("/download/songs")
+async def download_songs_zip(request: DownloadSongsRequest) -> Response:
+    """Download multiple songs as a zip file with ID3 metadata.
+
+    Used for playlist downloads where songs are specified by the frontend.
+    """
+    if not request.song_ids:
+        raise HTTPException(status_code=400, detail="No songs specified")
+
+    # Create zip file in memory
+    zip_buffer = io.BytesIO()
+    filenames_used: dict[str, int] = {}
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for sha_id in request.song_ids:
+            normalized = _normalize_sha_id(sha_id)
+            metadata = _get_song_metadata_for_download(normalized)
+            if not metadata:
+                continue
+
+            song_file = _resolve_song_file(normalized)
+            if not song_file or not song_file.exists():
+                continue
+
+            # Create tagged version
+            tagged_file = _create_tagged_song_file(normalized, song_file)
+
+            # Generate filename
+            artist_str = ", ".join(metadata["artists"]) if metadata["artists"] else "Unknown Artist"
+            title = metadata.get("title") or "Unknown Title"
+            base_filename = _sanitize_filename(f"{artist_str} - {title}")
+
+            # Handle duplicate filenames
+            if base_filename in filenames_used:
+                filenames_used[base_filename] += 1
+                filename = f"{base_filename} ({filenames_used[base_filename]}).mp3"
+            else:
+                filenames_used[base_filename] = 0
+                filename = f"{base_filename}.mp3"
+
+            # Add to zip
+            zf.write(tagged_file, filename)
+
+            # Cleanup temp file
+            if tagged_file != song_file:
+                try:
+                    shutil.rmtree(tagged_file.parent)
+                except Exception:
+                    pass
+
+    zip_buffer.seek(0)
+    archive_name = _sanitize_filename(request.archive_name) or "songs"
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive_name}.zip"',
+        },
+    )
+
+
+@router.get("/download/album/{album_id}")
+async def download_album_zip(album_id: str) -> Response:
+    """Download all songs in an album as a zip file with ID3 metadata."""
+    # Get album info and songs
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Find songs with this album_id
+            cur.execute(
+                f"""
+                SELECT
+                    s.sha_id,
+                    s.title,
+                    s.album,
+                    s.track_number,
+                    {ALBUM_KEY_SQL} AS album_key,
+                    COALESCE(
+                        ARRAY_AGG(DISTINCT a.name)
+                        FILTER (WHERE a.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    MAX(a_primary.name) AS primary_artist
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
+                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
+                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
+                GROUP BY s.sha_id, s.title, s.album, s.track_number
+                HAVING {ALBUM_KEY_SQL} = %s
+                ORDER BY s.track_number NULLS LAST, s.title
+                """,
+                (album_id,),
+            )
+            rows = cur.fetchall()
+
+    if not rows:
+        raise HTTPException(status_code=404, detail="Album not found or has no songs")
+
+    # Get album name and artist from first row
+    album_name = rows[0][2] or "Unknown Album"
+    album_artist = rows[0][6] or "Unknown Artist"
+    total_tracks = len(rows)
+
+    # Create zip file in memory
+    zip_buffer = io.BytesIO()
+    filenames_used: dict[str, int] = {}
+
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for row in rows:
+            sha_id = row[0]
+            title = row[1] or "Unknown Title"
+            track_number = row[3]
+            artists = list(row[5]) if row[5] else []
+
+            song_file = _resolve_song_file(sha_id)
+            if not song_file or not song_file.exists():
+                continue
+
+            # Get full metadata
+            metadata = _get_song_metadata_for_download(sha_id)
+            if metadata:
+                metadata["track_total"] = total_tracks
+
+            # Create tagged version
+            cover_art, cover_mime = _get_song_cover_art(sha_id)
+            temp_dir = tempfile.mkdtemp(prefix="songbase_album_")
+            temp_path = Path(temp_dir) / "song.mp3"
+            shutil.copy2(song_file, temp_path)
+
+            artist_str = ", ".join(artists) if artists else None
+            write_id3_tags(
+                temp_path,
+                title=title,
+                artist=artist_str,
+                album_artist=album_artist,
+                album=album_name,
+                year=metadata.get("year") if metadata else None,
+                track_number=track_number,
+                track_total=total_tracks,
+                genres=metadata.get("genres") if metadata else None,
+                cover_art=cover_art,
+                cover_art_mime=cover_mime,
+            )
+
+            # Generate filename with track number
+            artist_display = ", ".join(artists) if artists else "Unknown Artist"
+            if track_number:
+                base_filename = _sanitize_filename(f"{track_number:02d} - {artist_display} - {title}")
+            else:
+                base_filename = _sanitize_filename(f"{artist_display} - {title}")
+
+            # Handle duplicate filenames
+            if base_filename in filenames_used:
+                filenames_used[base_filename] += 1
+                filename = f"{base_filename} ({filenames_used[base_filename]}).mp3"
+            else:
+                filenames_used[base_filename] = 0
+                filename = f"{base_filename}.mp3"
+
+            # Add to zip
+            zf.write(temp_path, filename)
+
+            # Cleanup temp file
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
+
+    zip_buffer.seek(0)
+    archive_name = _sanitize_filename(f"{album_artist} - {album_name}") or "album"
+
+    return Response(
+        content=zip_buffer.getvalue(),
+        media_type="application/zip",
+        headers={
+            "Content-Disposition": f'attachment; filename="{archive_name}.zip"',
+        },
+    )
+
+
 @router.get("/images/song/{sha_id}")
 async def song_image(sha_id: str) -> Response:
     normalized = _normalize_sha_id(sha_id)
@@ -1820,7 +2235,9 @@ async def song_image(sha_id: str) -> Response:
         (normalized, "cover"),
     )
     if not payload:
-        raise HTTPException(status_code=404, detail="Image not found.")
+        # Return placeholder instead of 404
+        image_bytes, mime_type = _get_placeholder_image()
+        return Response(content=image_bytes, media_type=mime_type)
     image_bytes, mime_type = payload
     return Response(content=image_bytes, media_type=mime_type)
 
@@ -1829,7 +2246,9 @@ async def song_image(sha_id: str) -> Response:
 async def album_image(album_id: str) -> Response:
     album_key = _album_key_for_album_id(album_id)
     if not album_key:
-        raise HTTPException(status_code=404, detail="Album not found.")
+        # Return placeholder instead of 404
+        image_bytes, mime_type = _get_placeholder_image()
+        return Response(content=image_bytes, media_type=mime_type)
     payload = _fetch_image_bytes(
         """
         SELECT ia.image_bytes, ia.mime_type
@@ -1842,7 +2261,9 @@ async def album_image(album_id: str) -> Response:
         (album_key, "cover"),
     )
     if not payload:
-        raise HTTPException(status_code=404, detail="Image not found.")
+        # Return placeholder instead of 404
+        image_bytes, mime_type = _get_placeholder_image()
+        return Response(content=image_bytes, media_type=mime_type)
     image_bytes, mime_type = payload
     return Response(content=image_bytes, media_type=mime_type)
 
@@ -1857,8 +2278,9 @@ async def artist_image(artist_id: int) -> Response:
             )
             row = cur.fetchone()
             if not row:
-                # Return a 404 silently for images - the frontend will handle by showing a placeholder
-                raise HTTPException(status_code=404, detail="Artist not found")
+                # Return placeholder instead of 404
+                image_bytes, mime_type = _get_placeholder_image()
+                return Response(content=image_bytes, media_type=mime_type)
             artist_name = row[0]
 
     payload = _fetch_image_bytes(
@@ -1873,7 +2295,9 @@ async def artist_image(artist_id: int) -> Response:
         (artist_name,),
     )
     if not payload:
-        raise HTTPException(status_code=404, detail="Image not found")
+        # Return placeholder instead of 404
+        image_bytes, mime_type = _get_placeholder_image()
+        return Response(content=image_bytes, media_type=mime_type)
     image_bytes, mime_type = payload
     return Response(content=image_bytes, media_type=mime_type)
 
@@ -2695,4 +3119,77 @@ async def similar_songs(
         "songs": songs,
         "total": len(songs),
         "metric": metric,
+    }
+
+
+class PreferencePlaylistRequest(BaseModel):
+    """Request body for preference-based playlist generation."""
+    liked_song_ids: list[str]
+    disliked_song_ids: list[str] = []
+    limit: int = 50
+    metric: str = "cosine"
+    diversity: bool = True
+    dislike_weight: float = 0.5
+
+
+@router.post("/playlist/preferences")
+async def generate_preference_playlist(
+    request: PreferencePlaylistRequest,
+) -> dict[str, Any]:
+    """Generate a playlist based on user preferences (liked/disliked songs).
+
+    Uses song embeddings to find songs similar to liked songs while avoiding
+    songs similar to disliked ones.
+
+    Args:
+        request: Preference playlist request containing:
+            - liked_song_ids: List of SHA IDs of liked songs
+            - disliked_song_ids: List of SHA IDs of disliked songs
+            - limit: Number of songs to return (1-100)
+            - metric: Similarity metric (cosine, euclidean, dot)
+            - diversity: Whether to apply diversity constraints
+            - dislike_weight: Weight for dislike penalty (0-1)
+
+    Returns:
+        Playlist with songs ranked by preference score
+    """
+    from backend.processing.similarity_pipeline import pipeline as similarity_pipeline
+
+    if not request.liked_song_ids:
+        raise HTTPException(status_code=400, detail="At least one liked song is required")
+
+    if request.limit < 1 or request.limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    if request.metric not in ("cosine", "euclidean", "dot"):
+        raise HTTPException(status_code=400, detail="Metric must be cosine, euclidean, or dot")
+
+    if request.dislike_weight < 0 or request.dislike_weight > 1:
+        raise HTTPException(status_code=400, detail="Dislike weight must be between 0 and 1")
+
+    try:
+        result = similarity_pipeline.generate_preference_playlist(
+            liked_sha_ids=request.liked_song_ids,
+            disliked_sha_ids=request.disliked_song_ids,
+            limit=request.limit,
+            metric=request.metric,
+            apply_diversity=request.diversity,
+            dislike_weight=request.dislike_weight,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate playlist: {str(e)}")
+
+    return {
+        "playlist_type": "preferences",
+        "config": {
+            "liked_count": len(request.liked_song_ids),
+            "disliked_count": len(request.disliked_song_ids),
+            "limit": request.limit,
+            "metric": request.metric,
+            "diversity": request.diversity,
+            "dislike_weight": request.dislike_weight,
+        },
+        "result": result,
+        "songs": result.get("songs", []),
+        "total": len(result.get("songs", [])),
     }

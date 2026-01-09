@@ -40,6 +40,12 @@ YTDLP_MAX_SLEEP_INTERVAL = float(
 YTDLP_FORCE_IPV4 = _parse_bool(os.environ.get("SONGBASE_YTDLP_FORCE_IPV4"))
 YTDLP_DEBUG = _parse_bool(os.environ.get("SONGBASE_YTDLP_DEBUG"), default=True)
 
+# Player client fallback strategies for YouTube extraction
+# When signature extraction fails with one client, the downloader will try others
+# Comma-separated list of clients to try: default,android,ios,web,mediaconnect
+# Set to empty string to disable fallback and use only default client
+YTDLP_PLAYER_CLIENTS = os.environ.get("SONGBASE_YTDLP_PLAYER_CLIENTS", "default,android,ios,web,mediaconnect")
+
 
 def get_ytdlp_cookies_file() -> str | None:
     """Get yt-dlp cookies file from stored settings or environment variable.

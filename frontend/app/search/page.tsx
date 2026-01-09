@@ -2,16 +2,17 @@
 
 import { useState, useMemo, useEffect } from 'react';
 import Link from 'next/link';
-import { MagnifyingGlassIcon, XMarkIcon, ArrowLeftIcon, ArrowDownTrayIcon, RadioIcon } from '@heroicons/react/24/outline';
+import { MagnifyingGlassIcon, XMarkIcon, ArrowLeftIcon, ArrowDownTrayIcon, RadioIcon, MusicalNoteIcon } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
-import { Song } from '@/lib/types';
+import { Song, Playlist } from '@/lib/types';
 import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { usePlaylist } from '@/contexts/PlaylistContext';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { downloadSong } from '@/lib/downloadUtils';
 
-type SearchCategory = 'all' | 'songs' | 'artists' | 'albums' | 'genres';
+type SearchCategory = 'all' | 'songs' | 'artists' | 'albums' | 'playlists' | 'genres';
 type SortOption = 'relevance' | 'alphabetical' | 'recent';
 
 type BackendSong = {
@@ -131,46 +132,86 @@ export default function SearchPage() {
     if (selectedGenre) params.set('genre', selectedGenre);
     params.set('limit', '100');
 
-    fetchJson<{ songs: BackendSong[]; total: number }>(`/api/library/search?${params.toString()}`)
-      .then((data) => {
-        const mappedSongs = data.songs.map((song) => ({
-          id: song.sha_id,
-          hashId: song.sha_id,
-          title: song.title || 'Unknown Title',
-          artist: song.artists.length > 0 ? song.artists.join(', ') : 'Unknown Artist',
-          artistId: song.primary_artist_id ? String(song.primary_artist_id) : undefined,
-          album: song.album || 'Unknown Album',
-          albumId: song.album_id || undefined,
-          duration: song.duration_sec || 0,
-          albumArt: song.album_id
-            ? `/api/library/images/album/${song.album_id}`
-            : `/api/library/images/song/${song.sha_id}`,
-        }));
-        setSongs(mappedSongs);
+    // Search songs, artists, and albums in parallel
+    const searchPromises: Promise<void>[] = [];
 
-        // Also load artists and albums for "all" view
-        if (activeCategory === 'all') {
-          Promise.all([
-            fetchJson<{ albums: BackendAlbum[] }>('/api/library/albums/popular?limit=20'),
-            fetchJson<{ artists: BackendArtist[] }>('/api/library/artists/popular?limit=20'),
-          ])
-            .then(([albumsData, artistsData]) => {
-              setAlbums(albumsData.albums);
-              setArtists(artistsData.artists);
-            })
-            .catch(() => {
-              // Ignore errors for secondary data
-            });
-        }
-      })
+    // Always search songs
+    searchPromises.push(
+      fetchJson<{ songs: BackendSong[]; total: number }>(`/api/library/search?${params.toString()}`)
+        .then((data) => {
+          const mappedSongs = data.songs.map((song) => ({
+            id: song.sha_id,
+            hashId: song.sha_id,
+            title: song.title || 'Unknown Title',
+            artist: song.artists.length > 0 ? song.artists.join(', ') : 'Unknown Artist',
+            artistId: song.primary_artist_id ? String(song.primary_artist_id) : undefined,
+            album: song.album || 'Unknown Album',
+            albumId: song.album_id || undefined,
+            duration: song.duration_sec || 0,
+            albumArt: song.album_id
+              ? `/api/library/images/album/${song.album_id}`
+              : `/api/library/images/song/${song.sha_id}`,
+          }));
+          setSongs(mappedSongs);
+        })
+        .catch(() => {
+          setSongs([]);
+        })
+    );
+
+    // Search artists if query provided (not just genre filter)
+    if (searchQuery) {
+      searchPromises.push(
+        fetchJson<{ items: BackendArtist[]; total: number }>(`/api/library/artists?q=${encodeURIComponent(searchQuery)}&limit=50`)
+          .then((data) => {
+            setArtists(data.items);
+          })
+          .catch(() => {
+            setArtists([]);
+          })
+      );
+
+      // Search albums
+      searchPromises.push(
+        fetchJson<{ items: BackendAlbum[] }>(`/api/library/albums?q=${encodeURIComponent(searchQuery)}&limit=50`)
+          .then((data) => {
+            // Map to expected format (items has slightly different structure)
+            const mappedAlbums = data.items.map((item: any) => ({
+              album_id: item.album_id,
+              title: item.title,
+              song_count: item.song_count || 0,
+              artists: item.artist_name ? [item.artist_name] : [],
+              artist_ids: item.artist_id ? [item.artist_id] : [],
+              release_year: item.release_year,
+            }));
+            setAlbums(mappedAlbums);
+          })
+          .catch(() => {
+            setAlbums([]);
+          })
+      );
+    } else {
+      // No text query, just genre filter - show popular artists/albums
+      searchPromises.push(
+        fetchJson<{ artists: BackendArtist[] }>('/api/library/artists/popular?limit=20')
+          .then((data) => setArtists(data.artists))
+          .catch(() => setArtists([]))
+      );
+      searchPromises.push(
+        fetchJson<{ albums: BackendAlbum[] }>('/api/library/albums/popular?limit=20')
+          .then((data) => setAlbums(data.albums))
+          .catch(() => setAlbums([]))
+      );
+    }
+
+    Promise.all(searchPromises)
       .catch((err) => {
         setError(err instanceof Error ? err.message : String(err));
-        setSongs([]);
       })
       .finally(() => {
         setLoading(false);
       });
-  }, [searchQuery, selectedGenre, activeCategory]);
+  }, [searchQuery, selectedGenre]);
 
   const clearSearch = () => {
     setSearchQuery('');
@@ -190,9 +231,7 @@ export default function SearchPage() {
     setIsAddToPlaylistModalOpen(true);
   };
 
-  const handleDownloadSong = (song: Song) => {
-    console.log('Download song:', song.title, '(stub - will interface with backend)');
-  };
+  const handleDownloadSong = downloadSong;
 
   const handleDownloadAlbum = (albumId: string, albumTitle: string) => {
     console.log('Download album:', albumTitle, albumId, '(stub - will interface with backend)');
@@ -207,7 +246,43 @@ export default function SearchPage() {
     router.push(`/search?genre=${encodeURIComponent(genreName)}`);
   };
 
-  const totalResults = songs.length + (activeCategory === 'all' ? artists.length + albums.length : 0);
+  // Filter playlists by search query (client-side)
+  const filteredPlaylists = useMemo(() => {
+    if (!searchQuery) return playlists;
+    const query = searchQuery.toLowerCase();
+    return playlists.filter(
+      (p) =>
+        p.name.toLowerCase().includes(query) ||
+        (p.description && p.description.toLowerCase().includes(query))
+    );
+  }, [playlists, searchQuery]);
+
+  // Filter genres by search query (client-side)
+  const filteredGenres = useMemo(() => {
+    if (!searchQuery) return genres;
+    const query = searchQuery.toLowerCase();
+    return genres.filter((g) => g.name.toLowerCase().includes(query));
+  }, [genres, searchQuery]);
+
+  // Calculate total results based on active category
+  const totalResults = useMemo(() => {
+    switch (activeCategory) {
+      case 'songs':
+        return songs.length;
+      case 'artists':
+        return artists.length;
+      case 'albums':
+        return albums.length;
+      case 'playlists':
+        return filteredPlaylists.length;
+      case 'genres':
+        return filteredGenres.length;
+      case 'all':
+      default:
+        return songs.length + artists.length + albums.length + filteredPlaylists.length;
+    }
+  }, [activeCategory, songs.length, artists.length, albums.length, filteredPlaylists.length, filteredGenres.length]);
+
   const showResults = searchQuery || selectedGenre;
 
   // Filter displayed results by category
@@ -216,6 +291,10 @@ export default function SearchPage() {
     activeCategory === 'artists' ? artists : activeCategory === 'all' ? artists.slice(0, 5) : [];
   const displayedAlbums =
     activeCategory === 'albums' ? albums : activeCategory === 'all' ? albums.slice(0, 5) : [];
+  const displayedPlaylists =
+    activeCategory === 'playlists' ? filteredPlaylists : activeCategory === 'all' ? filteredPlaylists.slice(0, 5) : [];
+  const displayedGenres =
+    activeCategory === 'genres' ? filteredGenres : [];
 
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white pb-32">
@@ -254,7 +333,7 @@ export default function SearchPage() {
 
         {/* Category Filters */}
         <div className="flex gap-3 mt-6 flex-wrap">
-          {(['all', 'songs', 'artists', 'albums', 'genres'] as SearchCategory[]).map((category) => (
+          {(['all', 'songs', 'artists', 'albums', 'playlists', 'genres'] as SearchCategory[]).map((category) => (
             <button
               key={category}
               onClick={() => setActiveCategory(category)}
@@ -295,21 +374,29 @@ export default function SearchPage() {
       ) : activeCategory === 'genres' ? (
         // Genres List
         <div className="px-8">
-          <h2 className="text-2xl font-bold mb-6">Browse All Genres</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-            {genres.map((genre) => (
-              <button
-                key={genre.name}
-                onClick={() => handleGenreClick(genre.name)}
-                className="flex items-center justify-between px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-left group"
-              >
-                <span className="font-medium text-white group-hover:text-pink-400 transition-colors">
-                  {genre.name}
-                </span>
-                <span className="text-sm text-gray-400">{genre.count}</span>
-              </button>
-            ))}
-          </div>
+          <h2 className="text-2xl font-bold mb-6">
+            {searchQuery ? `Genres matching "${searchQuery}"` : 'Browse All Genres'}
+          </h2>
+          {filteredGenres.length > 0 ? (
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {filteredGenres.map((genre) => (
+                <button
+                  key={genre.name}
+                  onClick={() => handleGenreClick(genre.name)}
+                  className="flex items-center justify-between px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-left group"
+                >
+                  <span className="font-medium text-white group-hover:text-pink-400 transition-colors">
+                    {genre.name}
+                  </span>
+                  <span className="text-sm text-gray-400">{genre.count}</span>
+                </button>
+              ))}
+            </div>
+          ) : (
+            <div className="text-center py-16">
+              <p className="text-gray-400">No genres found matching "{searchQuery}"</p>
+            </div>
+          )}
         </div>
       ) : showResults && totalResults === 0 ? (
         <div className="px-8 text-center py-16">
@@ -443,12 +530,59 @@ export default function SearchPage() {
             </div>
           )}
 
+          {/* Playlists */}
+          {(activeCategory === 'all' || activeCategory === 'playlists') && displayedPlaylists.length > 0 && (
+            <div className="mb-12">
+              <h2 className="text-2xl font-bold mb-6">Playlists</h2>
+              <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
+                {displayedPlaylists.map((playlist) => (
+                  <Link key={playlist.id} href={`/playlist/${playlist.id}`} className="group">
+                    <div className="bg-gray-800 rounded-lg p-4 hover:bg-gray-700 transition-all">
+                      <div className="aspect-square rounded mb-4 bg-gradient-to-br from-pink-600 to-purple-700 overflow-hidden flex items-center justify-center">
+                        {playlist.coverArt ? (
+                          <img
+                            src={playlist.coverArt}
+                            alt={playlist.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : playlist.songs[0]?.albumArt ? (
+                          <img
+                            src={playlist.songs[0].albumArt}
+                            alt={playlist.name}
+                            className="w-full h-full object-cover"
+                          />
+                        ) : (
+                          <MusicalNoteIcon className="w-16 h-16 text-white/70" />
+                        )}
+                      </div>
+                      <h3 className="font-semibold text-white truncate mb-1">{playlist.name}</h3>
+                      {playlist.description && (
+                        <p className="text-sm text-gray-400 truncate mb-1">{playlist.description}</p>
+                      )}
+                      <p className="text-xs text-gray-500">
+                        {playlist.songs.length} song{playlist.songs.length !== 1 ? 's' : ''}
+                      </p>
+                    </div>
+                  </Link>
+                ))}
+              </div>
+              {activeCategory === 'all' && filteredPlaylists.length > 5 && (
+                <button
+                  onClick={() => setActiveCategory('playlists')}
+                  className="mt-4 text-gray-400 hover:text-white transition-colors text-sm"
+                >
+                  See all {filteredPlaylists.length} playlists
+                </button>
+              )}
+            </div>
+          )}
+
           {/* Empty State for browse */}
           {!showResults && totalResults === 0 && (
             <div className="text-center py-16">
               <MagnifyingGlassIcon className="w-16 h-16 text-gray-600 mx-auto mb-4" />
               <h2 className="text-2xl font-bold mb-2">Start Searching</h2>
-              <p className="text-gray-400">Search for songs, artists, albums, or browse by genre</p>
+              <p className="text-gray-400">Search for songs, artists, albums, playlists, or browse by genre</p>
             </div>
           )}
         </div>

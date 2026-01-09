@@ -116,25 +116,12 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                       onClick={() => playFromQueue(index)}
                       className="flex-1 flex items-center gap-3 min-w-0"
                     >
-                      {song.albumArt ? (
-                        <img
-                          src={song.albumArt}
-                          alt=""
-                          width={40}
-                          height={40}
-                          className="rounded object-cover bg-gray-700"
-                          onError={(e) => {
-                            e.currentTarget.style.display = 'none';
-                            const placeholder = e.currentTarget.nextElementSibling;
-                            if (placeholder) {
-                              (placeholder as HTMLElement).style.display = 'block';
-                            }
-                          }}
-                        />
-                      ) : null}
-                      <div
-                        className="w-10 h-10 rounded bg-gray-700 flex-shrink-0"
-                        style={{ display: song.albumArt ? 'none' : 'block' }}
+                      <img
+                        src={song.albumArt}
+                        alt=""
+                        width={40}
+                        height={40}
+                        className="rounded object-cover bg-gray-700"
                       />
                       <div className="flex-1 min-w-0">
                         <p className="text-white text-sm truncate">
@@ -172,25 +159,12 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                     key={`playlist-${song.id}-${index}`}
                     className="flex items-center gap-3 p-2 rounded-lg opacity-60"
                   >
-                    {song.albumArt ? (
-                      <img
-                        src={song.albumArt}
-                        alt=""
-                        width={40}
-                        height={40}
-                        className="rounded object-cover bg-gray-700"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                          const placeholder = e.currentTarget.nextElementSibling;
-                          if (placeholder) {
-                            (placeholder as HTMLElement).style.display = 'block';
-                          }
-                        }}
-                      />
-                    ) : null}
-                    <div
-                      className="w-10 h-10 rounded bg-gray-700 flex-shrink-0"
-                      style={{ display: song.albumArt ? 'none' : 'block' }}
+                    <img
+                      src={song.albumArt}
+                      alt=""
+                      width={40}
+                      height={40}
+                      className="rounded object-cover bg-gray-700"
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-white text-sm truncate">

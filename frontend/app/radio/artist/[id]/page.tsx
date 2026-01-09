@@ -9,6 +9,7 @@ import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { usePlaylist } from '@/contexts/PlaylistContext';
+import { downloadSong } from '@/lib/downloadUtils';
 
 type RadioSong = {
   sha_id: string;
@@ -99,9 +100,7 @@ export default function ArtistRadioPage() {
     setIsAddToPlaylistModalOpen(true);
   };
 
-  const handleDownloadSong = (song: Song) => {
-    console.log('Download song:', song.title, '(stub - will interface with backend)');
-  };
+  const handleDownloadSong = downloadSong;
 
   const handlePlayAll = () => {
     if (songs.length > 0) {

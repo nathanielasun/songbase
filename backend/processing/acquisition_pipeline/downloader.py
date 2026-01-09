@@ -86,6 +86,19 @@ def _should_skip_entry(entry: dict[str, Any]) -> bool:
     return False
 
 
+def _has_audio_formats(formats: list[dict[str, Any]]) -> bool:
+    """Check if any audio or video formats are available (not just images)."""
+    for fmt in formats:
+        if not isinstance(fmt, dict):
+            continue
+        acodec = fmt.get("acodec", "none")
+        vcodec = fmt.get("vcodec", "none")
+        # If it has audio or video codec, it's a real media format
+        if (acodec and acodec != "none") or (vcodec and vcodec != "none"):
+            return True
+    return False
+
+
 def _select_best_format(formats: list[dict[str, Any]]) -> str | None:
     """Intelligently select the best format from available formats.
 
@@ -148,6 +161,27 @@ def _select_best_format(formats: list[dict[str, Any]]) -> str | None:
 
     # Last resort: use default
     return None
+
+
+def _get_player_client_strategies() -> list[str | None]:
+    """Get the list of player clients to try from config.
+
+    Returns a list where None means 'use default client'.
+    """
+    clients_str = config.YTDLP_PLAYER_CLIENTS
+    if not clients_str or not clients_str.strip():
+        return [None]  # Only default
+
+    strategies: list[str | None] = []
+    for client in clients_str.split(","):
+        client = client.strip().lower()
+        if client in ("default", "none", ""):
+            strategies.append(None)
+        elif client in ("android", "ios", "web", "mediaconnect", "tv", "mweb"):
+            strategies.append(client)
+        # Skip unknown clients
+
+    return strategies if strategies else [None]
 
 
 def _search_entries(query: str, ffmpeg_path: str | None) -> list[dict[str, Any]]:
@@ -244,43 +278,113 @@ class _YtDlpLogger:
         return " | ".join(self.lines[-limit:])
 
 
+def _try_extract_with_client(
+    target: str,
+    player_client: str | None,
+    cookies_file: str | None,
+    ffmpeg_path: str | None,
+    skip_download: bool = True,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Try to extract info with a specific player client.
+
+    Returns:
+        Tuple of (info dict or None, error message or None)
+    """
+    format_opts: dict[str, Any] = {
+        "quiet": True,
+        "no_warnings": True,
+        "skip_download": skip_download,
+    }
+
+    if cookies_file:
+        format_opts["cookiefile"] = cookies_file
+    if ffmpeg_path:
+        format_opts["ffmpeg_location"] = ffmpeg_path
+
+    # Set player client via extractor args if specified
+    if player_client:
+        format_opts["extractor_args"] = {
+            "youtube": {
+                "player_client": [player_client],
+            }
+        }
+
+    try:
+        with yt_dlp.YoutubeDL(format_opts) as ydl:
+            info = ydl.extract_info(target, download=False)
+            if isinstance(info, dict):
+                return info, None
+            return None, "No info returned"
+    except Exception as e:
+        return None, str(e)
+
+
+def _get_formats_with_fallback(
+    target: str,
+    cookies_file: str | None,
+    ffmpeg_path: str | None,
+    queue_id: int,
+) -> tuple[list[dict[str, Any]], str | None, dict[str, Any] | None]:
+    """Try to get formats using different player client strategies.
+
+    Returns:
+        Tuple of (formats list, player_client that worked, info dict)
+    """
+    for player_client in _get_player_client_strategies():
+        client_name = player_client or "default"
+        if config.YTDLP_DEBUG:
+            print(f"[{queue_id}] Trying player client: {client_name}")
+
+        info, error = _try_extract_with_client(
+            target, player_client, cookies_file, ffmpeg_path
+        )
+
+        if info is None:
+            if config.YTDLP_DEBUG:
+                print(f"[{queue_id}] Player client {client_name} failed: {error}")
+            continue
+
+        formats = info.get("formats", [])
+
+        # Check if we got actual audio/video formats (not just images)
+        if _has_audio_formats(formats):
+            if config.YTDLP_DEBUG:
+                print(f"[{queue_id}] Player client {client_name} found {len(formats)} formats with audio/video")
+            return formats, player_client, info
+
+        if config.YTDLP_DEBUG:
+            print(f"[{queue_id}] Player client {client_name} only found images/no formats")
+
+    return [], None, None
+
+
 def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ffmpeg_path = _resolve_ffmpeg_path()
+    cookies_file = config.get_ytdlp_cookies_file()
 
     targets = _candidate_targets(item, ffmpeg_path)
     last_error: str | None = None
 
     for index, (target, entry) in enumerate(targets):
-        # First, get available formats for this target
-        format_opts = {
-            "quiet": True,
-            "no_warnings": True,
-            "skip_download": True,
-        }
+        if cookies_file and index == 0:
+            print(f"Using cookies file: {cookies_file}")
 
-        # Dynamically load cookies file
-        cookies_file = config.get_ytdlp_cookies_file()
-        if cookies_file:
-            format_opts["cookiefile"] = cookies_file
+        # Try to get formats with player client fallback
+        formats, working_client, info = _get_formats_with_fallback(
+            target, cookies_file, ffmpeg_path, item.queue_id
+        )
 
-        # Get available formats
+        # Select best format if we got formats
         selected_format = None
-        try:
-            with yt_dlp.YoutubeDL(format_opts) as ydl:
-                info = ydl.extract_info(target, download=False)
-                if isinstance(info, dict):
-                    formats = info.get("formats", [])
-                    if formats:
-                        selected_format = _select_best_format(formats)
-                        if selected_format:
-                            print(f"[{item.queue_id}] Selected format: {selected_format}")
-        except Exception as e:
-            print(f"[{item.queue_id}] Warning: Could not get formats, using default: {e}")
+        if formats:
+            selected_format = _select_best_format(formats)
+            if selected_format and config.YTDLP_DEBUG:
+                print(f"[{item.queue_id}] Selected format: {selected_format}")
 
-        # Now download with selected format
-        ydl_opts = {
+        # Build download options
+        ydl_opts: dict[str, Any] = {
             "outtmpl": {"default": str(output_dir / f"{item.queue_id}.%(ext)s")},
             "noplaylist": True,
             "quiet": not config.YTDLP_DEBUG,
@@ -290,12 +394,21 @@ def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
             "extractor_retries": config.YTDLP_EXTRACTOR_RETRIES,
         }
 
-        # Set format if we selected one, otherwise yt-dlp uses default
+        # Use the player client that worked for format extraction
+        if working_client:
+            ydl_opts["extractor_args"] = {
+                "youtube": {
+                    "player_client": [working_client],
+                }
+            }
+
+        # Set format selection
         if selected_format:
             ydl_opts["format"] = selected_format
         else:
-            # Fallback format string - prefer audio
-            ydl_opts["format"] = "bestaudio/best"
+            # No specific format selected - use flexible fallback
+            # This format string tries multiple options in order
+            ydl_opts["format"] = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best[height<=480]/best"
 
         if config.YTDLP_SLEEP_INTERVAL > 0:
             ydl_opts["sleep_interval"] = config.YTDLP_SLEEP_INTERVAL
@@ -306,25 +419,72 @@ def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
 
         if cookies_file:
             ydl_opts["cookiefile"] = cookies_file
-            if index == 0:  # Only print once
-                print(f"Using cookies file: {cookies_file}")
-
         if ffmpeg_path:
             ydl_opts["ffmpeg_location"] = ffmpeg_path
+
         _cleanup_attempt_files(output_dir, item.queue_id)
         logger = _YtDlpLogger()
         ydl_opts["logger"] = logger
-        try:
-            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(target, download=True)
-            info = _extract_entry(info)
-        except Exception as exc:  # noqa: BLE001
-            log_summary = logger.summary()
-            raw_error = str(exc)
-            if log_summary:
-                raw_error = f"{raw_error}; log={log_summary}"
-            last_error = _format_error(raw_error, target)
-            if "downloaded file is empty" in last_error.lower():
+
+        # If we couldn't get any formats, try downloading anyway with multiple client strategies
+        download_success = False
+        download_info = None
+
+        if not formats:
+            # Try each player client for download
+            for client in _get_player_client_strategies():
+                if client:
+                    ydl_opts["extractor_args"] = {
+                        "youtube": {"player_client": [client]}
+                    }
+                elif "extractor_args" in ydl_opts:
+                    del ydl_opts["extractor_args"]
+
+                client_name = client or "default"
+                if config.YTDLP_DEBUG:
+                    print(f"[{item.queue_id}] Download attempt with player client: {client_name}")
+
+                try:
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                        download_info = ydl.extract_info(target, download=True)
+                    download_info = _extract_entry(download_info)
+                    download_success = True
+                    break
+                except Exception as exc:
+                    log_summary = logger.summary()
+                    raw_error = str(exc)
+                    if log_summary:
+                        raw_error = f"{raw_error}; log={log_summary}"
+                    last_error = _format_error(raw_error, target)
+
+                    # Check if this is a "format not available" error - try next client
+                    if "format is not available" in str(exc).lower():
+                        if config.YTDLP_DEBUG:
+                            print(f"[{item.queue_id}] Format not available with {client_name}, trying next...")
+                        continue
+                    # Check for signature extraction failure
+                    if "signature" in str(exc).lower():
+                        if config.YTDLP_DEBUG:
+                            print(f"[{item.queue_id}] Signature issue with {client_name}, trying next...")
+                        continue
+                    # For other errors, stop trying
+                    break
+        else:
+            # We have formats, do a normal download
+            try:
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    download_info = ydl.extract_info(target, download=True)
+                download_info = _extract_entry(download_info)
+                download_success = True
+            except Exception as exc:
+                log_summary = logger.summary()
+                raw_error = str(exc)
+                if log_summary:
+                    raw_error = f"{raw_error}; log={log_summary}"
+                last_error = _format_error(raw_error, target)
+
+        if not download_success:
+            if "downloaded file is empty" in (last_error or "").lower():
                 if index + 1 < len(targets):
                     continue
             return DownloadResult(
@@ -353,7 +513,7 @@ def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
                 item=item,
                 success=False,
                 output_path=None,
-                info=_select_info(info),
+                info=_select_info(download_info) if download_info else None,
                 error=last_error,
             )
 
@@ -369,7 +529,7 @@ def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
                 item=item,
                 success=False,
                 output_path=None,
-                info=_select_info(info),
+                info=_select_info(download_info) if download_info else None,
                 error=last_error,
             )
 
@@ -380,7 +540,7 @@ def download_item(item: QueueItem, output_dir: Path) -> DownloadResult:
             item=item,
             success=True,
             output_path=output_path,
-            info=_select_info(info),
+            info=_select_info(download_info) if download_info else None,
             error=None,
             needs_conversion=needs_conversion,
         )

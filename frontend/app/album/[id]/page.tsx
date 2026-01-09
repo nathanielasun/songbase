@@ -9,6 +9,7 @@ import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { usePlaylist } from '@/contexts/PlaylistContext';
+import { downloadSong, downloadAlbum } from '@/lib/downloadUtils';
 
 type AlbumSong = {
   sha_id: string;
@@ -137,12 +138,10 @@ export default function AlbumPage() {
   };
 
   const handleDownloadAlbum = () => {
-    console.log('Download album:', albumData.title, '(stub - will interface with backend)');
+    downloadAlbum(albumId, albumData.title, albumData.artist_name || undefined);
   };
 
-  const handleDownloadSong = (song: Song) => {
-    console.log('Download song:', song.title, '(stub - will interface with backend)');
-  };
+  const handleDownloadSong = downloadSong;
 
   const handleArtistRadio = () => {
     if (albumData.artist_id) {
@@ -207,7 +206,11 @@ export default function AlbumPage() {
       </div>
 
       <div className="px-8 py-6 flex items-center gap-4">
-        <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
+        <button
+          onClick={() => albumSongs.length > 0 && handleSongClick(albumSongs[0])}
+          disabled={albumSongs.length === 0}
+          className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg disabled:opacity-50 disabled:cursor-not-allowed"
+        >
           <PlayIcon className="w-6 h-6" />
         </button>
         {albumData.artist_id && (

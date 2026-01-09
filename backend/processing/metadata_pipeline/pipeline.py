@@ -80,6 +80,46 @@ def _fetch_unverified_songs(limit: int | None) -> list[dict]:
     ]
 
 
+def _fetch_songs_by_sha_ids(sha_ids: Iterable[str]) -> list[dict]:
+    song_ids = [sha_id for sha_id in sha_ids if sha_id]
+    if not song_ids:
+        return []
+
+    query = """
+        SELECT
+            s.sha_id,
+            s.title,
+            s.album,
+            s.duration_sec,
+            COALESCE(
+                ARRAY_AGG(DISTINCT a.name)
+                FILTER (WHERE a.name IS NOT NULL),
+                ARRAY[]::TEXT[]
+            ) AS artists
+        FROM metadata.songs s
+        LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
+        LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
+        WHERE s.sha_id = ANY(%s)
+        GROUP BY s.sha_id
+    """
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (song_ids,))
+            rows = cur.fetchall()
+
+    return [
+        {
+            "sha_id": row[0],
+            "title": row[1],
+            "album": row[2],
+            "duration_sec": row[3],
+            "artists": list(row[4]),
+        }
+        for row in rows
+    ]
+
+
 def _ensure_named_entity(cur, table: str, name: str) -> int:
     id_column = {
         "artists": "artist_id",
@@ -309,30 +349,16 @@ def _fetch_images_for_song(
     return (album_images, artist_images)
 
 
-def verify_unverified_songs(
-    limit: int | None = None,
-    min_score: int | None = None,
-    rate_limit_seconds: float | None = None,
-    dry_run: bool = False,
-    status_callback: Callable[[str], None] | None = None,
-    stop_event: threading.Event | None = None,
+def _verify_songs(
+    songs: list[dict],
+    min_score: int | None,
+    rate_limit_seconds: float | None,
+    dry_run: bool,
+    status_callback: Callable[[str], None] | None,
+    stop_event: threading.Event | None,
 ) -> VerificationResult:
-    """
-    Verify unverified songs using multi-source metadata resolution.
-
-    Args:
-        limit: Maximum number of songs to verify
-        min_score: Minimum match score to accept
-        rate_limit_seconds: Rate limit for API requests
-        dry_run: If True, don't actually update the database
-        status_callback: Optional callback for status updates (receives status messages)
-
-    Returns:
-        VerificationResult with counts of processed, verified, and skipped songs
-    """
     configure_client(rate_limit_seconds=rate_limit_seconds)
 
-    songs = _fetch_unverified_songs(limit)
     processed = 0
     verified = 0
     skipped = 0
@@ -345,6 +371,16 @@ def verify_unverified_songs(
         print(message)
         if status_callback:
             status_callback(message)
+
+    if total == 0:
+        log("No songs found for metadata verification.")
+        return VerificationResult(
+            processed=0,
+            verified=0,
+            skipped=0,
+            album_images_fetched=0,
+            artist_images_fetched=0,
+        )
 
     log(f"\nStarting metadata verification for {total} song(s)...\n")
 
@@ -474,4 +510,56 @@ def verify_unverified_songs(
         skipped=skipped,
         album_images_fetched=album_images_fetched,
         artist_images_fetched=artist_images_fetched,
+    )
+
+
+def verify_unverified_songs(
+    limit: int | None = None,
+    min_score: int | None = None,
+    rate_limit_seconds: float | None = None,
+    dry_run: bool = False,
+    status_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
+) -> VerificationResult:
+    """
+    Verify unverified songs using multi-source metadata resolution.
+
+    Args:
+        limit: Maximum number of songs to verify
+        min_score: Minimum match score to accept
+        rate_limit_seconds: Rate limit for API requests
+        dry_run: If True, don't actually update the database
+        status_callback: Optional callback for status updates (receives status messages)
+
+    Returns:
+        VerificationResult with counts of processed, verified, and skipped songs
+    """
+    songs = _fetch_unverified_songs(limit)
+    return _verify_songs(
+        songs,
+        min_score,
+        rate_limit_seconds,
+        dry_run,
+        status_callback,
+        stop_event,
+    )
+
+
+def verify_songs_by_sha_ids(
+    sha_ids: Iterable[str],
+    *,
+    min_score: int | None = None,
+    rate_limit_seconds: float | None = None,
+    dry_run: bool = False,
+    status_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
+) -> VerificationResult:
+    songs = _fetch_songs_by_sha_ids(list(sha_ids))
+    return _verify_songs(
+        songs,
+        min_score,
+        rate_limit_seconds,
+        dry_run,
+        status_callback,
+        stop_event,
     )
