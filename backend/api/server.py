@@ -1,6 +1,16 @@
 import os
 import sys
+import warnings
 from pathlib import Path
+
+# Suppress FutureWarning from Keras tf2onnx_lib.py about np.object deprecation
+# This is a known issue with Keras and NumPy 2.x compatibility
+warnings.filterwarnings(
+    "ignore",
+    message=r".*np\.object.*",
+    category=FutureWarning,
+    module=r"keras\.src\.export\.tf2onnx_lib"
+)
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 

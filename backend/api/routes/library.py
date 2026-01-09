@@ -129,6 +129,10 @@ class ImageSyncRequest(BaseModel):
     dry_run: bool = False
 
 
+class StopMetadataRequest(BaseModel):
+    task: str
+
+
 _pipeline_lock = threading.Lock()
 _pipeline_thread: threading.Thread | None = None
 _pipeline_state: dict[str, Any] = {
@@ -137,7 +141,9 @@ _pipeline_state: dict[str, Any] = {
     "finished_at": None,
     "last_error": None,
     "last_config": None,
+    "stop_requested": False,
 }
+_pipeline_stop_event = threading.Event()
 
 _metadata_lock = threading.Lock()
 _metadata_threads: dict[str, threading.Thread | None] = {
@@ -152,6 +158,8 @@ _metadata_state: dict[str, dict[str, Any]] = {
         "last_error": None,
         "last_result": None,
         "last_config": None,
+        "stop_requested": False,
+        "last_status": None,
     },
     "images": {
         "running": False,
@@ -160,7 +168,13 @@ _metadata_state: dict[str, dict[str, Any]] = {
         "last_error": None,
         "last_result": None,
         "last_config": None,
+        "stop_requested": False,
+        "last_status": None,
     },
+}
+_metadata_stop_events: dict[str, threading.Event] = {
+    "verification": threading.Event(),
+    "images": threading.Event(),
 }
 
 
@@ -714,7 +728,7 @@ def _coerce_result(payload: Any) -> Any:
 def _start_metadata_task(
     task: str,
     config: dict[str, Any],
-    runner: Callable[[], Any],
+    runner: Callable[[threading.Event, Callable[[str], None] | None], Any],
 ) -> dict[str, Any]:
     with _metadata_lock:
         thread = _metadata_threads.get(task)
@@ -724,6 +738,8 @@ def _start_metadata_task(
                 detail=f"{task} task already running.",
             )
         state = _metadata_state.setdefault(task, {})
+        stop_event = _metadata_stop_events.setdefault(task, threading.Event())
+        stop_event.clear()
         state.update(
             {
                 "running": True,
@@ -732,12 +748,20 @@ def _start_metadata_task(
                 "last_error": None,
                 "last_result": None,
                 "last_config": config,
+                "stop_requested": False,
+                "last_status": None,
             }
         )
 
+        def _status_callback(message: str) -> None:
+            if message.startswith("__PROGRESS__"):
+                return
+            with _metadata_lock:
+                state["last_status"] = message
+
         def _worker() -> None:
             try:
-                result = runner()
+                result = runner(stop_event, _status_callback)
                 with _metadata_lock:
                     state["last_result"] = _coerce_result(result)
             except Exception as exc:  # noqa: BLE001
@@ -1121,7 +1145,7 @@ async def popular_artists(limit: int = 50) -> dict[str, Any]:
                     a.artist_id,
                     a.name,
                     COUNT(DISTINCT s.sha_id) as song_count,
-                    COUNT(DISTINCT s.album_id) FILTER (WHERE s.album_id IS NOT NULL) as album_count
+                    COUNT(DISTINCT s.album) FILTER (WHERE s.album IS NOT NULL AND s.album != '') as album_count
                 FROM metadata.artists a
                 JOIN metadata.song_artists sa ON a.artist_id = sa.artist_id
                 JOIN metadata.songs s ON sa.sha_id = s.sha_id
@@ -1319,19 +1343,22 @@ async def popular_albums(limit: int = 50) -> dict[str, Any]:
     with get_connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                """
+                f"""
                 SELECT
-                    s.album_id,
+                    {ALBUM_KEY_SQL} AS album_id,
                     s.album,
-                    COUNT(*) as song_count,
-                    array_agg(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL) AS artists,
-                    array_agg(DISTINCT a.artist_id ORDER BY a.name) FILTER (WHERE a.artist_id IS NOT NULL) AS artist_ids,
+                    COUNT(DISTINCT s.sha_id) as song_count,
+                    MAX(a_primary.name) AS primary_artist,
+                    MAX(a_primary.artist_id) AS primary_artist_id,
                     MIN(s.release_year) as release_year
                 FROM metadata.songs s
-                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
-                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
                 WHERE s.album IS NOT NULL AND s.album != ''
-                GROUP BY s.album_id, s.album
+                GROUP BY s.album, {ALBUM_KEY_SQL}
+                HAVING {ALBUM_KEY_SQL} IS NOT NULL
                 ORDER BY song_count DESC, s.album
                 LIMIT %s
                 """,
@@ -1345,8 +1372,8 @@ async def popular_albums(limit: int = 50) -> dict[str, Any]:
             "album_id": row[0],
             "title": row[1],
             "song_count": row[2],
-            "artists": row[3] if row[3] else [],
-            "artist_ids": row[4] if row[4] else [],
+            "artists": [row[3]] if row[3] else [],
+            "artist_ids": [row[4]] if row[4] else [],
             "release_year": row[5],
         })
 
@@ -2109,6 +2136,25 @@ async def metadata_status() -> dict[str, Any]:
         return {key: dict(value) for key, value in _metadata_state.items()}
 
 
+@router.post("/metadata/stop")
+async def stop_metadata_task(payload: StopMetadataRequest) -> dict[str, Any]:
+    task = payload.task.strip().lower()
+    if task not in _metadata_state:
+        raise HTTPException(status_code=400, detail="Unknown metadata task.")
+
+    with _metadata_lock:
+        thread = _metadata_threads.get(task)
+        state = _metadata_state.setdefault(task, {})
+        if thread and thread.is_alive():
+            stop_event = _metadata_stop_events.setdefault(task, threading.Event())
+            stop_event.set()
+            state["stop_requested"] = True
+            return {"status": "stopping", "state": dict(state)}
+
+        state["stop_requested"] = False
+        return {"status": "idle", "state": dict(state)}
+
+
 @router.post("/metadata/verify")
 async def verify_metadata(payload: VerifyMetadataRequest) -> dict[str, Any]:
     config = {
@@ -2118,12 +2164,17 @@ async def verify_metadata(payload: VerifyMetadataRequest) -> dict[str, Any]:
         "dry_run": payload.dry_run,
     }
 
-    def _runner() -> Any:
+    def _runner(
+        stop_event: threading.Event,
+        status_callback: Callable[[str], None] | None,
+    ) -> Any:
         return verify_unverified_songs(
             limit=payload.limit,
             min_score=payload.min_score,
             rate_limit_seconds=payload.rate_limit,
             dry_run=payload.dry_run,
+            stop_event=stop_event,
+            status_callback=status_callback,
         )
 
     return _start_metadata_task("verification", config, _runner)
@@ -2138,12 +2189,17 @@ async def sync_images(payload: ImageSyncRequest) -> dict[str, Any]:
         "dry_run": payload.dry_run,
     }
 
-    def _runner() -> Any:
+    def _runner(
+        stop_event: threading.Event,
+        status_callback: Callable[[str], None] | None,
+    ) -> Any:
         return sync_images_and_profiles(
             limit_songs=payload.limit_songs,
             limit_artists=payload.limit_artists,
             rate_limit_seconds=payload.rate_limit,
             dry_run=payload.dry_run,
+            stop_event=stop_event,
+            status_callback=status_callback,
         )
 
     return _start_metadata_task("images", config, _runner)
@@ -2207,12 +2263,14 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
         except RuntimeError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+        _pipeline_stop_event.clear()
         _pipeline_state.update(
             {
                 "running": True,
                 "started_at": _utc_now(),
                 "finished_at": None,
                 "last_error": None,
+                "stop_requested": False,
                 "last_config": {
                     "config": config.__dict__,
                     "paths": {
@@ -2227,7 +2285,11 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
 
         def _worker() -> None:
             try:
-                orchestrator.run_orchestrator(config, paths=pipeline_paths)
+                orchestrator.run_orchestrator(
+                    config,
+                    paths=pipeline_paths,
+                    stop_event=_pipeline_stop_event,
+                )
             except Exception as exc:  # noqa: BLE001
                 with _pipeline_lock:
                     _pipeline_state["last_error"] = str(exc)
@@ -2240,6 +2302,18 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
         _pipeline_thread.start()
 
     return {"status": "started", "state": dict(_pipeline_state)}
+
+
+@router.post("/pipeline/stop")
+async def stop_pipeline() -> dict[str, Any]:
+    with _pipeline_lock:
+        if _pipeline_thread and _pipeline_thread.is_alive():
+            _pipeline_stop_event.set()
+            _pipeline_state["stop_requested"] = True
+            return {"status": "stopping", "state": dict(_pipeline_state)}
+
+        _pipeline_state["stop_requested"] = False
+        return {"status": "idle", "state": dict(_pipeline_state)}
 
 
 @router.get("/pipeline/status")
@@ -2272,9 +2346,9 @@ async def search_library(
 
     Args:
         q: Text search query (searches title, artist, album)
-        genre: Filter by genre
+        genre: Filter by genre name
         artist_id: Filter by artist ID
-        album_id: Filter by album ID
+        album_id: Filter by album ID (MD5 hash)
         limit: Maximum number of results
         offset: Offset for pagination
 
@@ -2299,34 +2373,44 @@ async def search_library(
                     s.title ILIKE %s
                     OR s.album ILIKE %s
                     OR EXISTS (
-                        SELECT 1 FROM metadata.song_artists sa
-                        JOIN metadata.artists a ON sa.artist_id = a.artist_id
-                        WHERE sa.sha_id = s.sha_id AND a.name ILIKE %s
+                        SELECT 1 FROM metadata.song_artists sa_search
+                        JOIN metadata.artists a_search ON sa_search.artist_id = a_search.artist_id
+                        WHERE sa_search.sha_id = s.sha_id AND a_search.name ILIKE %s
                     )
                 )""")
                 params.extend([search_term, search_term, search_term])
 
             if genre:
-                where_clauses.append("s.genre ILIKE %s")
+                # Genre is stored in a separate table
+                where_clauses.append("""EXISTS (
+                    SELECT 1 FROM metadata.song_genres sg
+                    JOIN metadata.genres g ON sg.genre_id = g.genre_id
+                    WHERE sg.sha_id = s.sha_id AND g.name ILIKE %s
+                )""")
                 params.append(f"%{genre}%")
 
             if artist_id:
                 where_clauses.append("""EXISTS (
-                    SELECT 1 FROM metadata.song_artists sa
-                    WHERE sa.sha_id = s.sha_id AND sa.artist_id = %s
+                    SELECT 1 FROM metadata.song_artists sa_filter
+                    WHERE sa_filter.sha_id = s.sha_id AND sa_filter.artist_id = %s
                 )""")
                 params.append(artist_id)
 
             if album_id:
-                where_clauses.append("s.album_id = %s")
+                # album_id is a computed MD5 hash
+                where_clauses.append(f"{ALBUM_KEY_SQL} = %s")
                 params.append(album_id)
 
             where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
 
-            # Count total results
+            # Count total results - need to join for album_id computation
             count_query = f"""
                 SELECT COUNT(DISTINCT s.sha_id)
                 FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
                 {where_clause}
             """
             cur.execute(count_query, params)
@@ -2334,23 +2418,43 @@ async def search_library(
 
             # Get paginated results
             query = f"""
-                SELECT DISTINCT ON (s.sha_id)
+                SELECT
                     s.sha_id,
                     s.title,
                     s.album,
-                    s.album_id,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        WHEN MAX(a_primary.name) IS NULL THEN NULL
+                        ELSE md5(
+                            lower(coalesce(s.album, ''))
+                            || '::'
+                            || lower(MAX(a_primary.name))
+                        )
+                    END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    s.genre,
-                    array_agg(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL) AS artists,
-                    array_agg(DISTINCT a.artist_id ORDER BY a.name) FILTER (WHERE a.artist_id IS NOT NULL) AS artist_ids,
-                    (SELECT sa2.artist_id FROM metadata.song_artists sa2 WHERE sa2.sha_id = s.sha_id AND sa2.is_primary LIMIT 1) AS primary_artist_id
+                    (SELECT g.name FROM metadata.song_genres sg
+                     JOIN metadata.genres g ON sg.genre_id = g.genre_id
+                     WHERE sg.sha_id = s.sha_id LIMIT 1) AS genre,
+                    COALESCE(
+                        array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL),
+                        ARRAY[]::TEXT[]
+                    ) AS artists,
+                    COALESCE(
+                        array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL),
+                        ARRAY[]::BIGINT[]
+                    ) AS artist_ids,
+                    MAX(a_primary.artist_id) AS primary_artist_id
                 FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
                 LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
                 LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 {where_clause}
-                GROUP BY s.sha_id, s.title, s.album, s.album_id, s.duration_sec, s.release_year, s.genre
-                ORDER BY s.sha_id, s.title
+                GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
+                ORDER BY s.title, s.sha_id
                 LIMIT %s OFFSET %s
             """
             cur.execute(query, params + [limit, offset])
@@ -2366,8 +2470,8 @@ async def search_library(
             "duration_sec": row[4],
             "release_year": row[5],
             "genre": row[6],
-            "artists": row[7] if row[7] else [],
-            "artist_ids": row[8] if row[8] else [],
+            "artists": list(row[7]) if row[7] else [],
+            "artist_ids": list(row[8]) if row[8] else [],
             "primary_artist_id": row[9],
         })
 
@@ -2402,11 +2506,11 @@ async def list_genres(limit: int = 100) -> dict[str, Any]:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT genre, COUNT(*) as count
-                FROM metadata.songs
-                WHERE genre IS NOT NULL AND genre != ''
-                GROUP BY genre
-                ORDER BY count DESC, genre
+                SELECT g.name, COUNT(DISTINCT sg.sha_id) as count
+                FROM metadata.genres g
+                JOIN metadata.song_genres sg ON g.genre_id = sg.genre_id
+                GROUP BY g.genre_id, g.name
+                ORDER BY count DESC, g.name
                 LIMIT %s
                 """,
                 (limit,),

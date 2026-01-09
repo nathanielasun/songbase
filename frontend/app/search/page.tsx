@@ -9,7 +9,7 @@ import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
 import { usePlaylist } from '@/contexts/PlaylistContext';
-import { useRouter } from 'next/navigation';
+import { useRouter, useSearchParams } from 'next/navigation';
 
 type SearchCategory = 'all' | 'songs' | 'artists' | 'albums' | 'genres';
 type SortOption = 'relevance' | 'alphabetical' | 'recent';
@@ -59,12 +59,22 @@ const fetchJson = async <T,>(url: string, options?: RequestInit): Promise<T> => 
 
 export default function SearchPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
   const { playlists, addSongToPlaylist, createPlaylist } = usePlaylist();
 
   const [searchQuery, setSearchQuery] = useState('');
   const [activeCategory, setActiveCategory] = useState<SearchCategory>('all');
   const [selectedGenre, setSelectedGenre] = useState<string | null>(null);
+
+  // Read genre from URL params on mount
+  useEffect(() => {
+    const genreParam = searchParams.get('genre');
+    if (genreParam) {
+      setSelectedGenre(genreParam);
+      setActiveCategory('songs');
+    }
+  }, [searchParams]);
   const [sortBy, setSortBy] = useState<SortOption>('relevance');
   const [isAddToPlaylistModalOpen, setIsAddToPlaylistModalOpen] = useState(false);
   const [selectedSong, setSelectedSong] = useState<Song | null>(null);
@@ -165,6 +175,10 @@ export default function SearchPage() {
   const clearSearch = () => {
     setSearchQuery('');
     setSelectedGenre(null);
+    // Clear URL params if present
+    if (searchParams.get('genre')) {
+      router.push('/search');
+    }
   };
 
   const handleSongClick = (song: Song) => {
@@ -189,8 +203,8 @@ export default function SearchPage() {
   };
 
   const handleGenreClick = (genreName: string) => {
-    setSelectedGenre(genreName === selectedGenre ? null : genreName);
-    setSearchQuery('');
+    // Navigate to search page with genre parameter
+    router.push(`/search?genre=${encodeURIComponent(genreName)}`);
   };
 
   const totalResults = songs.length + (activeCategory === 'all' ? artists.length + albums.length : 0);
@@ -279,22 +293,20 @@ export default function SearchPage() {
           <p className="text-red-400">{error}</p>
         </div>
       ) : activeCategory === 'genres' ? (
-        // Genres Grid
+        // Genres List
         <div className="px-8">
           <h2 className="text-2xl font-bold mb-6">Browse All Genres</h2>
-          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
             {genres.map((genre) => (
               <button
                 key={genre.name}
                 onClick={() => handleGenreClick(genre.name)}
-                className={`aspect-square rounded-lg p-6 hover:scale-105 transition-transform ${
-                  selectedGenre === genre.name
-                    ? 'bg-gradient-to-br from-pink-600 to-purple-600'
-                    : 'bg-gradient-to-br from-pink-900 to-purple-900'
-                }`}
+                className="flex items-center justify-between px-4 py-3 bg-gray-800 hover:bg-gray-700 rounded-lg transition-colors text-left group"
               >
-                <h3 className="text-2xl font-bold">{genre.name}</h3>
-                <p className="text-sm text-gray-300 mt-2">{genre.count} songs</p>
+                <span className="font-medium text-white group-hover:text-pink-400 transition-colors">
+                  {genre.name}
+                </span>
+                <span className="text-sm text-gray-400">{genre.count}</span>
               </button>
             ))}
           </div>

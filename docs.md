@@ -192,6 +192,8 @@ try {
 - **Endpoints**:
   - `GET /api/processing/config`: Get processing configuration
   - `POST /api/processing/convert`: Convert MP3 to PCM WAV
+  - `GET /api/processing/metadata/verify-stream`: Stream metadata verification updates (SSE)
+  - `POST /api/processing/metadata/verify/stop`: Stop an active verification stream
 - **Usage**:
   ```bash
   # Get processing config
@@ -227,7 +229,9 @@ try {
   - `POST /api/library/sources/clear`: Clear `sources.jsonl` entries
   - `GET /api/library/stats`: Database + queue metrics
   - `POST /api/library/pipeline/run`: Start a processing pipeline run
+  - `POST /api/library/pipeline/stop`: Request the active processing pipeline to stop after the current stage
   - `GET /api/library/pipeline/status`: Fetch pipeline status + recent events
+  - `POST /api/library/metadata/stop`: Stop a running metadata task (`verification` or `images`)
 - **Usage**:
   ```bash
   curl -X POST http://localhost:8000/api/library/queue \
@@ -448,6 +452,7 @@ try {
   - `cli.py`: Command-line interface for verification
   - `config.py`: Configuration for MusicBrainz, Spotify, Wikidata APIs
   - `filename_parser.py`: Intelligent filename parsing to extract artist and title
+  - `id3_extractor.py`: MP3 ID3 tag extraction for genres and metadata using mutagen
   - `image_cli.py`: Standalone cover art + artist profile CLI
   - `image_db.py`: Image DB helpers
   - `image_pipeline.py`: Multi-source cover art + artist profile ingestion
@@ -960,6 +965,9 @@ python backend/processing/metadata_pipeline/cli.py --limit 100
 ```bash
 # Connect to SSE stream for real-time updates
 curl -N http://localhost:8000/api/processing/metadata/verify-stream?limit=10
+
+# Stop an in-flight verification stream
+curl -X POST http://localhost:8000/api/processing/metadata/verify/stop
 
 # SSE messages format (simple match):
 data: {"type": "status", "message": "[1/10] Verifying: ALLEYCVT - BACK2LIFE"}

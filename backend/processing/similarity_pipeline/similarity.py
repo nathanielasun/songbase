@@ -147,11 +147,11 @@ def build_pgvector_similarity_query(
         exclude_clause = f"AND sha_id NOT IN ({placeholders})"
 
     query = f"""
-        SELECT sha_id, vector {operator} %s AS distance
+        SELECT sha_id, vector {operator} %s::vector AS distance
         FROM embeddings.vggish_embeddings
         WHERE vector IS NOT NULL
         {exclude_clause}
-        ORDER BY vector {operator} %s
+        ORDER BY vector {operator} %s::vector
         LIMIT %s
     """
 

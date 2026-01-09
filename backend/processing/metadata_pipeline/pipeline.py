@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass
 from typing import Callable, Iterable
 
 from backend.db.connection import get_connection
 
 from . import config
+from .id3_extractor import extract_genres_for_song
 from .multi_source_resolver import MetadataMatch, resolve_with_parsing
 from .musicbrainz_client import configure_client
 from .image_pipeline import (
@@ -313,6 +315,7 @@ def verify_unverified_songs(
     rate_limit_seconds: float | None = None,
     dry_run: bool = False,
     status_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> VerificationResult:
     """
     Verify unverified songs using multi-source metadata resolution.
@@ -348,6 +351,13 @@ def verify_unverified_songs(
     with get_connection() as conn:
         with conn.cursor() as cur:
             for song in songs:
+                if stop_event and stop_event.is_set():
+                    log("Stop requested. Ending verification early.")
+                    if status_callback:
+                        status_callback(
+                            f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}"
+                        )
+                    break
                 processed += 1
                 title = song["title"]
                 artists = song["artists"]
@@ -378,31 +388,64 @@ def verify_unverified_songs(
                 except Exception as e:  # noqa: BLE001
                     log(f"  ✗ Error: {str(e)}")
                     skipped += 1
+
+                    # Send progress update even for errors
+                    if status_callback:
+                        status_callback(f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}")
                     continue
 
                 if not match:
                     log(f"  ✗ No match found from any source")
                     skipped += 1
+
+                    # Send progress update even for skipped songs
+                    if status_callback:
+                        status_callback(f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}")
                     continue
 
                 if dry_run:
                     match_artist = match.artists[0] if match.artists else "Unknown"
                     log(f"  ✓ Match found (dry run): {match_artist} - {match.title} (source: {match.source}, score: {match.score})")
                     verified += 1
+
+                    # Send progress update for dry run
+                    if status_callback:
+                        status_callback(f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}")
                     continue
 
                 # Apply the match to the database
                 _apply_match(cur, song["sha_id"], match)
                 if match.artists:
                     _replace_song_artists(cur, song["sha_id"], match.artists)
+
+                # Merge genres from MusicBrainz tags and ID3 metadata
+                all_genres: set[str] = set()
                 if match.tags:
-                    _replace_song_genres(cur, song["sha_id"], match.tags)
+                    all_genres.update(match.tags)
+
+                # Also extract genres from ID3 tags in the audio file
+                try:
+                    id3_genres = extract_genres_for_song(song["sha_id"])
+                    if id3_genres:
+                        all_genres.update(id3_genres)
+                except Exception:
+                    pass  # ID3 extraction is best-effort
+
+                if all_genres:
+                    _replace_song_genres(cur, song["sha_id"], all_genres)
 
                 match_artist = match.artists[0] if match.artists else "Unknown"
                 log(f"  ✓ Verified: {match_artist} - {match.title} (source: {match.source}, score: {match.score})")
                 verified += 1
 
                 # Fetch images for the verified song
+                if stop_event and stop_event.is_set():
+                    log("Stop requested. Skipping image fetch.")
+                    if status_callback:
+                        status_callback(
+                            f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}"
+                        )
+                    break
                 try:
                     album_delta, artist_delta = _fetch_images_for_song(
                         song["sha_id"],
@@ -415,8 +458,13 @@ def verify_unverified_songs(
                 except Exception as e:  # noqa: BLE001
                     log(f"  ⚠ Image fetching failed: {str(e)}")
 
-            if not dry_run:
-                conn.commit()
+                # Commit immediately after each song is verified
+                if not dry_run:
+                    conn.commit()
+
+                # Send progress update after this song completes
+                if status_callback:
+                    status_callback(f"__PROGRESS__:{verified}:{processed}:{skipped}:{album_images_fetched}:{artist_images_fetched}")
 
     log(f"\nVerification complete: {verified}/{processed} verified, {skipped} skipped")
     log(f"Images fetched: {album_images_fetched} album covers, {artist_images_fetched} artist images")

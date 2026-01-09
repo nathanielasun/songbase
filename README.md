@@ -172,6 +172,7 @@ The frontend proxies API requests to the backend automatically. API calls to `/a
 - **Run until empty**: Optional checkbox on the pipeline form to automatically process batches until the queue is completely empty.
 - **Queue pagination**: The pipeline queue table is paged (10/25/50/100 per page).
 - **Run details**: The Downloads tab shows live pipeline run details (last event, config, and paths).
+- **Stop controls**: Active pipeline, verification, and image sync tasks can be stopped from the UI.
 - **Seed sources**: Use the Downloads tab to insert `sources.jsonl` entries into the queue.
 - **Last seed timestamp**: The Sources view displays when the queue was last seeded.
 - **Queue cleanup**: The Downloads tab includes confirmation-protected controls to clear sources.jsonl entries or the pipeline queue.
@@ -379,3 +380,10 @@ npm run electron:dev
 ```
 
 The Electron window will load `http://localhost:3000` in development mode.
+
+## Known Issues & Suppressions
+
+The development servers suppress certain deprecation warnings from third-party dependencies:
+
+- **Keras `np.object` FutureWarning**: Suppressed via Python warning filters. This is a known compatibility issue between Keras and NumPy 2.x that will be fixed in future Keras releases.
+- **Node.js `util._extend` deprecation**: Suppressed via `NODE_NO_WARNINGS=1` in the dev script. This originates from a transitive dependency. Use `npm run dev:debug` to see all warnings for debugging.

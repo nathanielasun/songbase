@@ -6,6 +6,7 @@ import sys
 import asyncio
 import queue
 import json
+import threading
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
@@ -17,6 +18,7 @@ router = APIRouter()
 
 # Global queue for status messages
 status_queue: queue.Queue = queue.Queue()
+verification_stop_event = threading.Event()
 
 class ProcessingStatus(BaseModel):
     status: str
@@ -73,6 +75,8 @@ async def verify_metadata_stream(
             except queue.Empty:
                 break
 
+        verification_stop_event.clear()
+
         # Status callback that adds messages to the queue
         def status_callback(message: str):
             status_queue.put(message)
@@ -90,6 +94,7 @@ async def verify_metadata_stream(
                     rate_limit_seconds=1.0,
                     dry_run=False,
                     status_callback=status_callback,
+                    stop_event=verification_stop_event,
                 )
                 result["processed"] = res.processed
                 result["verified"] = res.verified
@@ -121,6 +126,14 @@ async def verify_metadata_stream(
                         yield f"data: {json.dumps({'type': 'complete', 'processed': result['processed'], 'verified': result['verified'], 'skipped': result['skipped'], 'album_images': result['album_images'], 'artist_images': result['artist_images']})}\n\n"
                     break
 
+                # Check if this is a progress message
+                if message.startswith("__PROGRESS__:"):
+                    # Parse progress: __PROGRESS__:verified:processed:skipped:album_images:artist_images
+                    parts = message.split(":")
+                    if len(parts) == 6:
+                        yield f"data: {json.dumps({'type': 'progress', 'verified': int(parts[1]), 'processed': int(parts[2]), 'skipped': int(parts[3]), 'album_images': int(parts[4]), 'artist_images': int(parts[5])})}\n\n"
+                    continue
+
                 # Use json.dumps to properly escape message and create valid JSON
                 yield f"data: {json.dumps({'type': 'status', 'message': message})}\n\n"
 
@@ -141,3 +154,9 @@ async def verify_metadata_stream(
             "X-Accel-Buffering": "no",  # Disable buffering in nginx
         },
     )
+
+
+@router.post("/metadata/verify/stop")
+async def stop_verify_metadata() -> dict:
+    verification_stop_event.set()
+    return {"status": "stopping"}

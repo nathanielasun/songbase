@@ -31,7 +31,7 @@ def get_song_embedding(sha_id: str) -> NDArray[np.float32] | None:
                 (sha_id,),
             )
             row = cur.fetchone()
-            if row and row[0]:
+            if row is not None and row[0] is not None:
                 return np.array(row[0], dtype=np.float32)
     return None
 
@@ -114,16 +114,28 @@ def generate_song_radio(
                     s.sha_id,
                     s.title,
                     s.album,
-                    s.album_id,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        WHEN MAX(a_primary.name) IS NULL THEN NULL
+                        ELSE md5(
+                            lower(coalesce(s.album, ''))
+                            || '::'
+                            || lower(MAX(a_primary.name))
+                        )
+                    END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    array_agg(a.name ORDER BY sa.is_primary DESC, a.name) AS artists,
-                    array_agg(a.artist_id ORDER BY sa.is_primary DESC, a.name) AS artist_ids
+                    COALESCE(array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL), ARRAY[]::TEXT[]) AS artists,
+                    COALESCE(array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL), ARRAY[]::BIGINT[]) AS artist_ids
                 FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
                 LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
                 LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 WHERE s.sha_id IN ({placeholders})
-                GROUP BY s.sha_id, s.title, s.album, s.album_id, s.duration_sec, s.release_year
+                GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 """,
                 sha_ids,
             )
@@ -152,8 +164,8 @@ def generate_song_radio(
             "album_id": row[3],
             "duration_sec": row[4],
             "release_year": row[5],
-            "artists": row[6] if row[6] else [],
-            "artist_ids": row[7] if row[7] else [],
+            "artists": list(row[6]) if row[6] else [],
+            "artist_ids": list(row[7]) if row[7] else [],
             "similarity": float(similarity_score),
         })
 
@@ -241,16 +253,28 @@ def generate_artist_radio(
                     s.sha_id,
                     s.title,
                     s.album,
-                    s.album_id,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        WHEN MAX(a_primary.name) IS NULL THEN NULL
+                        ELSE md5(
+                            lower(coalesce(s.album, ''))
+                            || '::'
+                            || lower(MAX(a_primary.name))
+                        )
+                    END AS album_id,
                     s.duration_sec,
                     s.release_year,
-                    array_agg(a.name ORDER BY sa.is_primary DESC, a.name) AS artists,
-                    array_agg(a.artist_id ORDER BY sa.is_primary DESC, a.name) AS artist_ids
+                    COALESCE(array_agg(DISTINCT a.name) FILTER (WHERE a.name IS NOT NULL), ARRAY[]::TEXT[]) AS artists,
+                    COALESCE(array_agg(DISTINCT a.artist_id) FILTER (WHERE a.artist_id IS NOT NULL), ARRAY[]::BIGINT[]) AS artist_ids
                 FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa_primary
+                    ON sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                LEFT JOIN metadata.artists a_primary
+                    ON a_primary.artist_id = sa_primary.artist_id
                 LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
                 LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                 WHERE s.sha_id IN ({placeholders})
-                GROUP BY s.sha_id, s.title, s.album, s.album_id, s.duration_sec, s.release_year
+                GROUP BY s.sha_id, s.title, s.album, s.duration_sec, s.release_year
                 """,
                 sha_ids,
             )
@@ -279,8 +303,8 @@ def generate_artist_radio(
             "album_id": row[3],
             "duration_sec": row[4],
             "release_year": row[5],
-            "artists": row[6] if row[6] else [],
-            "artist_ids": row[7] if row[7] else [],
+            "artists": list(row[6]) if row[6] else [],
+            "artist_ids": list(row[7]) if row[7] else [],
             "similarity": float(similarity_score),
         })
 

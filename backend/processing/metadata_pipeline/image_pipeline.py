@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import ssl
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -654,6 +655,7 @@ def sync_images_and_profiles(
     rate_limit_seconds: float | None = None,
     dry_run: bool = False,
     status_callback: Callable[[str], None] | None = None,
+    stop_event: threading.Event | None = None,
 ) -> ImagePipelineResult:
     def log(message: str) -> None:
         """Log message to console and optionally to status callback."""
@@ -686,6 +688,9 @@ def sync_images_and_profiles(
     with with_image_connection() as image_conn:
         with image_conn.cursor() as image_cur:
             for song in songs:
+                if stop_event and stop_event.is_set():
+                    log("Stop requested. Ending image sync early.")
+                    break
                 songs_processed += 1
 
                 artist_display = song.artist or "Unknown Artist"
@@ -767,6 +772,9 @@ def sync_images_and_profiles(
                 log(f"\nProcessing artist profiles...\n")
 
             for artist in artists:
+                if stop_event and stop_event.is_set():
+                    log("Stop requested. Ending artist profile sync early.")
+                    break
                 artist_count += 1
                 log(f"[Artists {artist_count}/{total_artists}] Processing: {artist.name}")
 

@@ -6,7 +6,17 @@ import importlib
 import os
 import subprocess
 import sys
+import warnings
 from pathlib import Path
+
+# Suppress FutureWarning from Keras tf2onnx_lib.py about np.object deprecation
+# This is a known issue with Keras and NumPy 2.x compatibility
+warnings.filterwarnings(
+    "ignore",
+    message=r".*np\.object.*",
+    category=FutureWarning,
+    module=r"keras\.src\.export\.tf2onnx_lib"
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_REQUIREMENTS = REPO_ROOT / "backend" / "api" / "requirements.txt"

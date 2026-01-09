@@ -5,6 +5,7 @@ import hashlib
 import json
 import sys
 import importlib
+import threading
 from concurrent.futures import ProcessPoolExecutor, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -35,6 +36,10 @@ STATUS_EMBEDDED = "embedded"
 STATUS_STORED = "stored"
 STATUS_DUPLICATE = "duplicate"
 STATUS_FAILED = "failed"
+
+
+def _stop_requested(stop_event: threading.Event | None) -> bool:
+    return bool(stop_event and stop_event.is_set())
 
 
 def preflight_dependencies() -> None:
@@ -488,7 +493,12 @@ def _process_items(
     paths: PipelinePaths,
     state: StateWriter,
     config: OrchestratorConfig,
+    stop_event: threading.Event | None = None,
 ) -> None:
+    if _stop_requested(stop_event):
+        state.append({"stage": "stop_requested", "ts": utc_now()})
+        print("Stop requested. Skipping processing batch.")
+        return
     if not items:
         print("No downloaded items ready for processing.")
         return
@@ -507,6 +517,10 @@ def _process_items(
         max_workers=embed_workers
     ) as embed_pool:
         for item in items:
+            if _stop_requested(stop_event):
+                state.append({"stage": "stop_requested", "ts": utc_now()})
+                print("Stop requested. Halting new PCM conversions.")
+                break
             raw_pcm = _raw_pcm_path(paths, item.queue_id)
             future = pcm_pool.submit(
                 _convert_mp3_to_pcm,
@@ -517,6 +531,10 @@ def _process_items(
             pcm_futures[future] = item
 
         for future in as_completed(pcm_futures):
+            if _stop_requested(stop_event):
+                state.append({"stage": "stop_requested", "ts": utc_now()})
+                print("Stop requested. Halting PCM completion handling.")
+                break
             item = pcm_futures[future]
             try:
                 result = future.result()
@@ -557,8 +575,15 @@ def _process_items(
                 )
             ] = item
 
+        if _stop_requested(stop_event):
+            return
+
         hash_results: dict[int, HashResult] = {}
         for future in as_completed(hash_futures):
+            if _stop_requested(stop_event):
+                state.append({"stage": "stop_requested", "ts": utc_now()})
+                print("Stop requested. Halting hash completion handling.")
+                break
             item = hash_futures[future]
             try:
                 result = future.result()
@@ -581,8 +606,15 @@ def _process_items(
                 sha_id=result.sha_id,
             )
 
+        if _stop_requested(stop_event):
+            return
+
         embed_results: dict[int, EmbeddingResult] = {}
         for future in as_completed(embed_futures):
+            if _stop_requested(stop_event):
+                state.append({"stage": "stop_requested", "ts": utc_now()})
+                print("Stop requested. Halting embedding completion handling.")
+                break
             item = embed_futures[future]
             try:
                 result = future.result()
@@ -602,6 +634,10 @@ def _process_items(
             acquisition_db.mark_status(item.queue_id, STATUS_EMBEDDED)
 
         for item in items:
+            if _stop_requested(stop_event):
+                state.append({"stage": "stop_requested", "ts": utc_now()})
+                print("Stop requested. Halting final storage.")
+                break
             hash_result = hash_results.get(item.queue_id)
             embed_result = embed_results.get(item.queue_id)
             if not hash_result or not embed_result:
@@ -805,6 +841,7 @@ def run_orchestrator(
     config: OrchestratorConfig,
     *,
     paths: PipelinePaths | None = None,
+    stop_event: threading.Event | None = None,
 ) -> None:
     dependencies.ensure_first_run_dependencies()
     preflight_dependencies()
@@ -821,6 +858,10 @@ def run_orchestrator(
     # Main processing loop - continues until queue is empty if run_until_empty is True
     batch_num = 0
     while True:
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Ending pipeline.")
+            break
         batch_num += 1
         if config.run_until_empty and batch_num > 1:
             print(f"\n--- Starting batch {batch_num} (run until empty mode) ---")
@@ -840,6 +881,11 @@ def run_orchestrator(
                 f"{results['downloaded']} downloaded, {results['failed']} failed."
             )
 
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Ending pipeline after download.")
+            break
+
         # Audio conversion phase (convert video/other formats to MP3)
         conversion_results = audio_conversion_pipeline.convert_pending(
             limit=config.process_limit,
@@ -854,6 +900,11 @@ def run_orchestrator(
                 f"{conversion_results['failed']} failed."
             )
 
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Ending pipeline after conversion.")
+            break
+
         # Processing phase
         process_statuses = {
             acquisition_config.DOWNLOAD_STATUS_DOWNLOADED,
@@ -862,7 +913,12 @@ def run_orchestrator(
             STATUS_EMBEDDED,
         }
         items = _fetch_processing_items(process_statuses, config.process_limit)
-        _process_items(items, paths, state, config)
+        _process_items(items, paths, state, config, stop_event)
+
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Ending pipeline after processing.")
+            break
 
         # Check if we should continue or exit the loop
         if not config.run_until_empty:
@@ -885,30 +941,43 @@ def run_orchestrator(
         # Continue to next batch
         print(f"Queue has {total_remaining} items remaining, continuing...")
 
+    if _stop_requested(stop_event):
+        state.append({"stage": "stopped", "ts": utc_now()})
+        return
+
     # Post-processing tasks (run once at the end)
     if config.verify and not config.dry_run:
-        result = verify_unverified_songs()
-        print(
-            "Verification complete. "
-            f"{result.verified} verified, {result.skipped} skipped."
-        )
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Skipping verification.")
+        else:
+            result = verify_unverified_songs(stop_event=stop_event)
+            print(
+                "Verification complete. "
+                f"{result.verified} verified, {result.skipped} skipped."
+            )
 
     if config.images:
-        result = sync_images_and_profiles(
-            limit_songs=config.image_limit_songs,
-            limit_artists=config.image_limit_artists,
-            rate_limit_seconds=config.image_rate_limit,
-            dry_run=config.dry_run,
-        )
-        print(
-            "Image sync complete. "
-            f"Songs processed: {result.songs_processed}, "
-            f"Song images: {result.song_images}, "
-            f"Album images: {result.album_images}, "
-            f"Artist profiles: {result.artist_profiles}, "
-            f"Artist images: {result.artist_images}, "
-            f"Failed: {result.failed}"
-        )
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Skipping image sync.")
+        else:
+            result = sync_images_and_profiles(
+                limit_songs=config.image_limit_songs,
+                limit_artists=config.image_limit_artists,
+                rate_limit_seconds=config.image_rate_limit,
+                dry_run=config.dry_run,
+                stop_event=stop_event,
+            )
+            print(
+                "Image sync complete. "
+                f"Songs processed: {result.songs_processed}, "
+                f"Song images: {result.song_images}, "
+                f"Album images: {result.album_images}, "
+                f"Artist profiles: {result.artist_profiles}, "
+                f"Artist images: {result.artist_images}, "
+                f"Failed: {result.failed}"
+            )
 
     state.append({"stage": "finished", "ts": utc_now()})
 

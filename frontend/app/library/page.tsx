@@ -16,6 +16,8 @@ import {
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
+import { CollapsibleSection } from './components/CollapsibleSection';
+import { CollapsiblePanel } from './components/CollapsiblePanel';
 
 type QueueItem = {
   queue_id: number;
@@ -106,6 +108,8 @@ type MetadataTaskState = {
   last_error?: string | null;
   last_result?: Record<string, unknown> | null;
   last_config?: Record<string, unknown> | null;
+  last_status?: string | null;
+  stop_requested?: boolean;
 };
 
 type MetadataStatus = {
@@ -268,6 +272,12 @@ export default function LibraryPage() {
   const [songDetailError, setSongDetailError] = useState<string | null>(null);
   const [songDetailBusy, setSongDetailBusy] = useState(false);
   const [songEditMode, setSongEditMode] = useState(false);
+  const [statsCollapsed, setStatsCollapsed] = useState(false);
+  const [queueBreakdownCollapsed, setQueueBreakdownCollapsed] = useState(false);
+  const [songMetadataCollapsed, setSongMetadataCollapsed] = useState(false);
+  const [metadataVerificationCollapsed, setMetadataVerificationCollapsed] = useState(false);
+  const [imageSyncCollapsed, setImageSyncCollapsed] = useState(false);
+  const [linkUnassignedCollapsed, setLinkUnassignedCollapsed] = useState(false);
   const [songEditForm, setSongEditForm] = useState<SongEditForm>({
     title: '',
     artist: '',
@@ -282,6 +292,8 @@ export default function LibraryPage() {
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
   const [isSourcesCollapsed, setIsSourcesCollapsed] = useState(true);
   const [isBackendCollapsed, setIsBackendCollapsed] = useState(true);
+  const [isPipelineCollapsed, setIsPipelineCollapsed] = useState(false);
+  const [isRecentActivityCollapsed, setIsRecentActivityCollapsed] = useState(true);
 
   const [acquisitionSettings, setAcquisitionSettings] = useState<AcquisitionSettings | null>(null);
   const [backendCookiesFile, setBackendCookiesFile] = useState('');
@@ -324,7 +336,18 @@ export default function LibraryPage() {
   });
   const [liveVerificationStatus, setLiveVerificationStatus] = useState<string[]>([]);
   const [verificationInProgress, setVerificationInProgress] = useState(false);
+  const [verificationProgress, setVerificationProgress] = useState<{
+    verified: number;
+    processed: number;
+    skipped: number;
+    album_images: number;
+    artist_images: number;
+  } | null>(null);
+  const [currentVerificationStatus, setCurrentVerificationStatus] = useState<string | null>(
+    null
+  );
   const liveStatusRef = useRef<HTMLDivElement>(null);
+  const verificationStreamRef = useRef<EventSource | null>(null);
 
   // Auto-scroll to bottom when new status messages arrive
   useEffect(() => {
@@ -615,14 +638,22 @@ export default function LibraryPage() {
 
   useEffect(() => {
     if (activeTab !== 'downloads') return;
+    const intervalMs = pipelineStatus.running ? 1000 : 2500;
     const interval = window.setInterval(() => {
       refreshQueue();
       refreshPipeline();
       refreshSources();
       refreshStats();
-    }, 5000);
+    }, intervalMs);
     return () => window.clearInterval(interval);
-  }, [activeTab, refreshPipeline, refreshQueue, refreshSources, refreshStats]);
+  }, [
+    activeTab,
+    pipelineStatus.running,
+    refreshPipeline,
+    refreshQueue,
+    refreshSources,
+    refreshStats,
+  ]);
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
@@ -658,18 +689,22 @@ export default function LibraryPage() {
 
   useEffect(() => {
     if (activeTab !== 'stats') return;
-    if (!metadataStatus.verification.running && !metadataStatus.images.running) {
-      return;
-    }
+    const intervalMs =
+      verificationInProgress || metadataStatus.verification.running || metadataStatus.images.running
+        ? 1000
+        : 2500;
     const interval = window.setInterval(() => {
+      refreshStats();
       refreshMetadataStatus();
-    }, 5000);
+    }, intervalMs);
     return () => window.clearInterval(interval);
   }, [
     activeTab,
     metadataStatus.images.running,
     metadataStatus.verification.running,
     refreshMetadataStatus,
+    refreshStats,
+    verificationInProgress,
   ]);
 
   useEffect(() => {
@@ -785,6 +820,8 @@ export default function LibraryPage() {
     | Record<string, unknown>
     | null;
   const imageResult = metadataStatus.images?.last_result as Record<string, unknown> | null;
+  const latestVerificationStatus =
+    currentVerificationStatus || metadataStatus.verification?.last_status || null;
 
   const handleQueueSingle = async () => {
     setActionMessage(null);
@@ -1077,6 +1114,23 @@ export default function LibraryPage() {
     }
   };
 
+  const handleStopPipeline = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    setBusy(true);
+    try {
+      await fetchJson('/api/library/pipeline/stop', { method: 'POST' });
+      setActionMessage('Pipeline stop requested. The current stage will finish first.');
+      refreshPipeline();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to stop pipeline.'
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const handleSeedSources = async () => {
     setActionMessage(null);
     setActionError(null);
@@ -1203,6 +1257,8 @@ export default function LibraryPage() {
     setMetadataBusy(true);
     setVerificationInProgress(true);
     setLiveVerificationStatus(['Starting metadata verification...']);
+    setCurrentVerificationStatus('Starting metadata verification...');
+    setVerificationProgress(null);
 
     try {
       // Build query parameters for SSE endpoint
@@ -1213,7 +1269,12 @@ export default function LibraryPage() {
       const url = `/api/processing/metadata/verify-stream${params.toString() ? `?${params.toString()}` : ''}`;
 
       // Connect to SSE endpoint
+      if (verificationStreamRef.current) {
+        verificationStreamRef.current.close();
+      }
       const eventSource = new EventSource(url);
+      verificationStreamRef.current = eventSource;
+      setMetadataBusy(false);
 
       eventSource.onmessage = (event) => {
         try {
@@ -1222,6 +1283,18 @@ export default function LibraryPage() {
           if (data.type === 'status') {
             // Append status message
             setLiveVerificationStatus((prev) => [...prev, data.message]);
+            setCurrentVerificationStatus(data.message);
+          } else if (data.type === 'progress') {
+            // Update progress counters after each song
+            setVerificationProgress({
+              verified: data.verified,
+              processed: data.processed,
+              skipped: data.skipped,
+              album_images: data.album_images,
+              artist_images: data.artist_images,
+            });
+            // Also refresh stats so the verified count updates in real-time
+            refreshStats();
           } else if (data.type === 'complete') {
             // Verification complete
             const albumImagesMsg = data.album_images > 0 ? `, ${data.album_images} album covers` : '';
@@ -1230,19 +1303,27 @@ export default function LibraryPage() {
               ...prev,
               `\nVerification complete: ${data.verified}/${data.processed} verified, ${data.skipped} skipped${albumImagesMsg}${artistImagesMsg}`,
             ]);
+            setCurrentVerificationStatus(
+              `Verification complete: ${data.verified}/${data.processed} verified`
+            );
             setActionMessage(`Verification complete: ${data.verified}/${data.processed} verified`);
             eventSource.close();
+            verificationStreamRef.current = null;
             setVerificationInProgress(false);
             setMetadataBusy(false);
+            setVerificationProgress(null);
             refreshMetadataStatus();
             refreshStats();
           } else if (data.type === 'error') {
             // Error occurred
             setLiveVerificationStatus((prev) => [...prev, `\nError: ${data.message}`]);
+            setCurrentVerificationStatus(`Error: ${data.message}`);
             setActionError(data.message);
             eventSource.close();
+            verificationStreamRef.current = null;
             setVerificationInProgress(false);
             setMetadataBusy(false);
+            setVerificationProgress(null);
           }
         } catch (parseError) {
           console.error('Failed to parse SSE message:', parseError);
@@ -1253,20 +1334,57 @@ export default function LibraryPage() {
         console.error('SSE error:', error);
         setActionError('Connection to verification stream lost.');
         eventSource.close();
+        verificationStreamRef.current = null;
         setVerificationInProgress(false);
         setMetadataBusy(false);
+        setCurrentVerificationStatus('Connection to verification stream lost.');
       };
 
       // Store event source to allow cancellation
       (eventSource as any)._cleanup = () => {
         eventSource.close();
+        verificationStreamRef.current = null;
         setVerificationInProgress(false);
         setMetadataBusy(false);
+        setCurrentVerificationStatus('Verification stopped.');
       };
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to start verification.'
       );
+      setVerificationInProgress(false);
+      setMetadataBusy(false);
+    }
+  };
+
+  const handleStopVerification = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    setMetadataBusy(true);
+    try {
+      const results = await Promise.allSettled([
+        fetchJson('/api/processing/metadata/verify/stop', { method: 'POST' }),
+        fetchJson('/api/library/metadata/stop', {
+          method: 'POST',
+          body: JSON.stringify({ task: 'verification' }),
+        }),
+      ]);
+      const success = results.some((result) => result.status === 'fulfilled');
+      if (!success) {
+        throw new Error('Stop request failed.');
+      }
+      setActionMessage('Verification stop requested.');
+      setCurrentVerificationStatus('Stop requested.');
+      refreshMetadataStatus();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to stop verification.'
+      );
+    } finally {
+      if (verificationStreamRef.current) {
+        verificationStreamRef.current.close();
+        verificationStreamRef.current = null;
+      }
       setVerificationInProgress(false);
       setMetadataBusy(false);
     }
@@ -1304,6 +1422,26 @@ export default function LibraryPage() {
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to start image sync.'
+      );
+    } finally {
+      setMetadataBusy(false);
+    }
+  };
+
+  const handleStopImageSync = async () => {
+    setActionMessage(null);
+    setActionError(null);
+    setMetadataBusy(true);
+    try {
+      await fetchJson('/api/library/metadata/stop', {
+        method: 'POST',
+        body: JSON.stringify({ task: 'images' }),
+      });
+      setActionMessage('Image sync stop requested.');
+      refreshMetadataStatus();
+    } catch (error) {
+      setActionError(
+        error instanceof Error ? error.message : 'Failed to stop image sync.'
       );
     } finally {
       setMetadataBusy(false);
@@ -1859,10 +1997,18 @@ export default function LibraryPage() {
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center justify-between flex-wrap gap-4">
-                    <div className="flex items-center gap-3">
+                    <button
+                      onClick={() => setIsPipelineCollapsed(!isPipelineCollapsed)}
+                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
+                    >
                       <PlayIcon className="h-5 w-5 text-gray-300" />
                       <h2 className="text-xl font-semibold">Run Pipeline</h2>
-                    </div>
+                      {isPipelineCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
+                      )}
+                    </button>
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         pipelineStatus.running ? 'bg-green-500/20 text-green-200' : 'bg-gray-800 text-gray-300'
@@ -1872,7 +2018,9 @@ export default function LibraryPage() {
                     </span>
                   </div>
 
-                  <div className="grid gap-4 mt-5 md:grid-cols-2">
+                  {!isPipelineCollapsed && (
+                    <>
+                      <div className="grid gap-4 mt-5 md:grid-cols-2">
                     <label className="text-sm text-gray-300">
                       Download limit
                       <input
@@ -1968,14 +2116,25 @@ export default function LibraryPage() {
                     <div className="text-sm text-gray-400">
                       Temp cache: {settings?.paths.preprocessed_cache_dir ?? 'default'}
                     </div>
-                    <button
-                      onClick={handleRunPipeline}
-                      disabled={busy || pipelineStatus.running}
-                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      <PlayIcon className="h-4 w-4" />
-                      Start pipeline
-                    </button>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {pipelineStatus.running && (
+                        <button
+                          onClick={handleStopPipeline}
+                          disabled={busy}
+                          className="inline-flex items-center gap-2 rounded-full border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          Stop pipeline
+                        </button>
+                      )}
+                      <button
+                        onClick={handleRunPipeline}
+                        disabled={busy || pipelineStatus.running}
+                        className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        <PlayIcon className="h-4 w-4" />
+                        Start pipeline
+                      </button>
+                    </div>
                   </div>
 
                   {pipelineStatus.last_config && (
@@ -2043,6 +2202,8 @@ export default function LibraryPage() {
                         cache: {formatValue(pipelinePaths.song_cache_dir)}
                       </div>
                     </div>
+                  )}
+                    </>
                   )}
                 </section>
 
@@ -2188,12 +2349,13 @@ export default function LibraryPage() {
                   )}
                 </section>
 
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <QueueListIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Recent Activity</h2>
-                  </div>
-                  <div className="mt-4 space-y-3 text-sm text-gray-300">
+                <CollapsibleSection
+                  title="Recent Activity"
+                  icon={<QueueListIcon className="h-5 w-5 text-gray-300" />}
+                  isCollapsed={isRecentActivityCollapsed}
+                  onToggle={() => setIsRecentActivityCollapsed(!isRecentActivityCollapsed)}
+                >
+                  <div className="space-y-3 text-sm text-gray-300">
                     {(pipelineStatus.events ?? []).length === 0 && (
                       <p className="text-gray-500">Pipeline events will appear here.</p>
                     )}
@@ -2216,18 +2378,19 @@ export default function LibraryPage() {
                       </div>
                     ))}
                   </div>
-                </section>
+                </CollapsibleSection>
               </div>
             )}
 
             {activeTab === 'stats' && (
               <div className="space-y-6">
                 <div className="grid gap-6 lg:grid-cols-[1.4fr_1fr]">
-                  <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                    <div className="flex items-center gap-3">
-                      <ChartBarIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Database Overview</h2>
-                    </div>
+                  <CollapsiblePanel
+                    title="Database Overview"
+                    icon={<ChartBarIcon className="h-5 w-5 text-gray-300" />}
+                    isCollapsed={statsCollapsed}
+                    onToggle={() => setStatsCollapsed(!statsCollapsed)}
+                  >
                     <p className="text-sm text-gray-400 mt-2">
                       Core metadata metrics from Postgres and pgvector.
                     </p>
@@ -2255,14 +2418,28 @@ export default function LibraryPage() {
                         ? new Date(stats.last_updated).toLocaleString()
                         : '--'}
                     </p>
-                  </section>
+                  </CollapsiblePanel>
 
                   <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                    <div className="flex items-center gap-3">
-                      <QueueListIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Queue Breakdown</h2>
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <QueueListIcon className="h-5 w-5 text-gray-300" />
+                        <h2 className="text-xl font-semibold">Queue Breakdown</h2>
+                      </div>
+                      <button
+                        onClick={() => setQueueBreakdownCollapsed(!queueBreakdownCollapsed)}
+                        className="rounded-full p-1 text-gray-400 hover:text-white"
+                        title={queueBreakdownCollapsed ? "Expand" : "Collapse"}
+                      >
+                        {queueBreakdownCollapsed ? (
+                          <ChevronDownIcon className="h-5 w-5" />
+                        ) : (
+                          <ChevronUpIcon className="h-5 w-5" />
+                        )}
+                      </button>
                     </div>
-                    <div className="mt-5 space-y-3 text-sm text-gray-300">
+                    {!queueBreakdownCollapsed && (
+                      <div className="mt-5 space-y-3 text-sm text-gray-300">
                       {Object.entries(stats.queue).length === 0 && (
                         <p className="text-gray-500">No queue metrics available yet.</p>
                       )}
@@ -2275,19 +2452,35 @@ export default function LibraryPage() {
                           <span className="text-white font-semibold">{count}</span>
                         </div>
                       ))}
-                    </div>
+                      </div>
+                    )}
                   </section>
                 </div>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <InformationCircleIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Song Metadata</h2>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <InformationCircleIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Song Metadata</h2>
+                    </div>
+                    <button
+                      onClick={() => setSongMetadataCollapsed(!songMetadataCollapsed)}
+                      className="rounded-full p-1 text-gray-400 hover:text-white"
+                      title={songMetadataCollapsed ? "Expand" : "Collapse"}
+                    >
+                      {songMetadataCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Review stored songs and edit metadata. Updates will reconcile artist and album
-                    records when possible.
-                  </p>
+                  {!songMetadataCollapsed && (
+                    <>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Review stored songs and edit metadata. Updates will reconcile artist and album
+                        records when possible.
+                      </p>
 
                   <div className="mt-5 grid gap-6 lg:grid-cols-[1.4fr_0.9fr]">
                     <div className="space-y-4">
@@ -2652,16 +2845,33 @@ export default function LibraryPage() {
                       )}
                     </aside>
                   </div>
+                    </>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <ArrowPathIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Metadata Verification</h2>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <ArrowPathIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Metadata Verification</h2>
+                    </div>
+                    <button
+                      onClick={() => setMetadataVerificationCollapsed(!metadataVerificationCollapsed)}
+                      className="rounded-full p-1 text-gray-400 hover:text-white"
+                      title={metadataVerificationCollapsed ? "Expand" : "Collapse"}
+                    >
+                      {metadataVerificationCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Resolve unverified songs using MusicBrainz, Spotify, Wikidata, and Cover Art Archive. Intelligently parses filenames and tries all sources to find the best metadata match.
-                  </p>
+                  {!metadataVerificationCollapsed && (
+                    <>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Resolve unverified songs using MusicBrainz, Spotify, Wikidata, and Cover Art Archive. Intelligently parses filenames and tries all sources to find the best metadata match.
+                      </p>
                   <div className="grid gap-4 mt-4 md:grid-cols-3">
                     <label className="text-sm text-gray-300">
                       Limit
@@ -2721,28 +2931,80 @@ export default function LibraryPage() {
                         {verificationInProgress || metadataStatus.verification.running ? 'Running' : 'Idle'}
                       </span>
                     </div>
-                    <button
-                      onClick={handleVerifyMetadata}
-                      disabled={metadataBusy || metadataStatus.verification.running || verificationInProgress}
-                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      Run verification
-                    </button>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {(verificationInProgress || metadataStatus.verification.running) && (
+                        <button
+                          onClick={handleStopVerification}
+                          disabled={metadataBusy}
+                          className="inline-flex items-center gap-2 rounded-full border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          Stop verification
+                        </button>
+                      )}
+                      <button
+                        onClick={handleVerifyMetadata}
+                        disabled={metadataBusy || metadataStatus.verification.running || verificationInProgress}
+                        className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        Run verification
+                      </button>
+                    </div>
                   </div>
 
+                  {(verificationInProgress || metadataStatus.verification.running || latestVerificationStatus) && (
+                    <div className="mt-4 rounded-xl border border-gray-800 bg-gray-900/60 p-4 text-sm text-gray-300">
+                      <p className="text-xs uppercase text-gray-500 mb-2">Current status</p>
+                      <p className="text-white">
+                        {latestVerificationStatus || 'Waiting for updates...'}
+                      </p>
+                    </div>
+                  )}
+
                   {/* Live Status Updates */}
-                  {verificationInProgress && liveVerificationStatus.length > 0 && (
-                    <div
-                      ref={liveStatusRef}
-                      className="mt-4 rounded-xl bg-gray-950/50 border border-gray-700 p-4 max-h-96 overflow-y-auto"
-                    >
-                      <p className="text-xs uppercase text-gray-500 mb-2">Live Status</p>
-                      <div className="space-y-1 font-mono text-xs text-gray-300">
-                        {liveVerificationStatus.map((status, idx) => (
-                          <div key={idx} className="whitespace-pre-wrap">
-                            {status}
+                  {liveVerificationStatus.length > 0 && (
+                    <div className="mt-4 space-y-4">
+                      {/* Progress counters */}
+                      {verificationProgress && (
+                        <div className="rounded-xl bg-gray-950/50 border border-gray-700 p-4">
+                          <p className="text-xs uppercase text-gray-500 mb-3">Progress</p>
+                          <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                            <div>
+                              <div className="text-2xl font-bold text-green-400">{verificationProgress.verified}</div>
+                              <div className="text-xs text-gray-400">Verified</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-blue-400">{verificationProgress.processed}</div>
+                              <div className="text-xs text-gray-400">Processed</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-yellow-400">{verificationProgress.skipped}</div>
+                              <div className="text-xs text-gray-400">Skipped</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-purple-400">{verificationProgress.album_images}</div>
+                              <div className="text-xs text-gray-400">Album Covers</div>
+                            </div>
+                            <div>
+                              <div className="text-2xl font-bold text-pink-400">{verificationProgress.artist_images}</div>
+                              <div className="text-xs text-gray-400">Artist Images</div>
+                            </div>
                           </div>
-                        ))}
+                        </div>
+                      )}
+
+                      {/* Live status log */}
+                      <div
+                        ref={liveStatusRef}
+                        className="rounded-xl bg-gray-950/50 border border-gray-700 p-4 max-h-96 overflow-y-auto"
+                      >
+                        <p className="text-xs uppercase text-gray-500 mb-2">Live Status</p>
+                        <div className="space-y-1 font-mono text-xs text-gray-300">
+                          {liveVerificationStatus.map((status, idx) => (
+                            <div key={idx} className="whitespace-pre-wrap">
+                              {status}
+                            </div>
+                          ))}
+                        </div>
                       </div>
                     </div>
                   )}
@@ -2768,16 +3030,33 @@ export default function LibraryPage() {
                       {metadataStatus.verification.last_error}
                     </p>
                   )}
+                    </>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Image & Artist Sync</h2>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Image & Artist Sync</h2>
+                    </div>
+                    <button
+                      onClick={() => setImageSyncCollapsed(!imageSyncCollapsed)}
+                      className="rounded-full p-1 text-gray-400 hover:text-white"
+                      title={imageSyncCollapsed ? "Expand" : "Collapse"}
+                    >
+                      {imageSyncCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
-                  <p className="text-sm text-gray-400 mt-2">
-                    Sync cover art, album images, and artist profiles for verified songs.
-                  </p>
+                  {!imageSyncCollapsed && (
+                    <>
+                      <p className="text-sm text-gray-400 mt-2">
+                        Sync cover art, album images, and artist profiles for verified songs.
+                      </p>
                   <div className="grid gap-4 mt-4 md:grid-cols-3">
                     <label className="text-sm text-gray-300">
                       Song limit
@@ -2834,13 +3113,24 @@ export default function LibraryPage() {
                         {metadataStatus.images.running ? 'Running' : 'Idle'}
                       </span>
                     </div>
-                    <button
-                      onClick={handleSyncImages}
-                      disabled={metadataBusy || metadataStatus.images.running}
-                      className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
-                    >
-                      Sync images & profiles
-                    </button>
+                    <div className="flex flex-wrap items-center gap-3">
+                      {metadataStatus.images.running && (
+                        <button
+                          onClick={handleStopImageSync}
+                          disabled={metadataBusy}
+                          className="inline-flex items-center gap-2 rounded-full border border-red-500/50 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/10 disabled:opacity-50"
+                        >
+                          Stop image sync
+                        </button>
+                      )}
+                      <button
+                        onClick={handleSyncImages}
+                        disabled={metadataBusy || metadataStatus.images.running}
+                        className="inline-flex items-center gap-2 rounded-full bg-white px-5 py-2 text-sm font-semibold text-black hover:bg-gray-200 disabled:opacity-50"
+                      >
+                        Sync images & profiles
+                      </button>
+                    </div>
                   </div>
                   <div className="mt-4 grid gap-3 text-sm text-gray-300 md:grid-cols-2">
                     <div>
@@ -2875,13 +3165,30 @@ export default function LibraryPage() {
                       {metadataStatus.images.last_error}
                     </p>
                   )}
+                    </>
+                  )}
                 </section>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center gap-3">
-                    <MagnifyingGlassIcon className="h-5 w-5 text-gray-300" />
-                    <h2 className="text-xl font-semibold">Link Unassigned Songs</h2>
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <MagnifyingGlassIcon className="h-5 w-5 text-gray-300" />
+                      <h2 className="text-xl font-semibold">Link Unassigned Songs</h2>
+                    </div>
+                    <button
+                      onClick={() => setLinkUnassignedCollapsed(!linkUnassignedCollapsed)}
+                      className="rounded-full p-1 text-gray-400 hover:text-white"
+                      title={linkUnassignedCollapsed ? "Expand" : "Collapse"}
+                    >
+                      {linkUnassignedCollapsed ? (
+                        <ChevronDownIcon className="h-5 w-5" />
+                      ) : (
+                        <ChevronUpIcon className="h-5 w-5" />
+                      )}
+                    </button>
                   </div>
+                  {!linkUnassignedCollapsed && (
+                    <>
                   <p className="text-sm text-gray-400 mt-2">
                     Attach songs missing album or artist metadata to an existing album record.
                   </p>
@@ -2969,6 +3276,8 @@ export default function LibraryPage() {
                       </tbody>
                     </table>
                   </div>
+                    </>
+                  )}
                 </section>
               </div>
             )}

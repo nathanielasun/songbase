@@ -45,9 +45,14 @@ def _resolve_ffmpeg_path() -> str | None:
 def _build_query(item: QueueItem) -> str:
     if item.search_query:
         return item.search_query
-    if item.artist:
-        return f"{item.artist} - {item.title}"
-    return item.title
+        
+    # Clean parts for better search results
+    title = _clean_text(item.title) if item.title else ""
+    artist = _clean_text(item.artist) if item.artist else ""
+    
+    if artist and title:
+        return f"{artist} - {title}"
+    return title or item.title  # Fallback to raw title if cleaning made it empty
 
 
 def _select_info(info: dict[str, Any]) -> dict[str, Any]:
