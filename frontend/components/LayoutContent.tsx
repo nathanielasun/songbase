@@ -16,6 +16,7 @@ function PlayerWrapper() {
     isPlaying,
     repeatMode,
     shuffleEnabled,
+    playbackVersion,
     togglePlayPause,
     playNext,
     playPrevious,
@@ -32,6 +33,7 @@ function PlayerWrapper() {
       isPlaying={isPlaying}
       repeatMode={repeatMode}
       shuffleEnabled={shuffleEnabled}
+      playbackVersion={playbackVersion}
       onPlayPause={togglePlayPause}
       onNext={playNext}
       onPrevious={playPrevious}

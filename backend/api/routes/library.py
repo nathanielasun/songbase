@@ -1100,6 +1100,51 @@ async def list_albums(
     }
 
 
+@router.get("/artists/popular")
+async def popular_artists(limit: int = 50) -> dict[str, Any]:
+    """Get most popular artists by song count.
+
+    Args:
+        limit: Maximum number of artists to return
+
+    Returns:
+        List of popular artists with metadata
+    """
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 200")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    a.artist_id,
+                    a.name,
+                    COUNT(DISTINCT s.sha_id) as song_count,
+                    COUNT(DISTINCT s.album_id) FILTER (WHERE s.album_id IS NOT NULL) as album_count
+                FROM metadata.artists a
+                JOIN metadata.song_artists sa ON a.artist_id = sa.artist_id
+                JOIN metadata.songs s ON sa.sha_id = s.sha_id
+                GROUP BY a.artist_id, a.name
+                ORDER BY song_count DESC, a.name
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    artists = []
+    for row in rows:
+        artists.append({
+            "artist_id": row[0],
+            "name": row[1],
+            "song_count": row[2],
+            "album_count": row[3],
+        })
+
+    return {"artists": artists, "total": len(artists)}
+
+
 @router.get("/artists/{artist_id}")
 async def get_artist(
     artist_id: int,
@@ -1256,6 +1301,56 @@ async def get_artist(
             for row in album_rows
         ],
     }
+
+
+@router.get("/albums/popular")
+async def popular_albums(limit: int = 50) -> dict[str, Any]:
+    """Get most popular albums by song count.
+
+    Args:
+        limit: Maximum number of albums to return
+
+    Returns:
+        List of popular albums with metadata
+    """
+    if limit < 1 or limit > 200:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 200")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    s.album_id,
+                    s.album,
+                    COUNT(*) as song_count,
+                    array_agg(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL) AS artists,
+                    array_agg(DISTINCT a.artist_id ORDER BY a.name) FILTER (WHERE a.artist_id IS NOT NULL) AS artist_ids,
+                    MIN(s.release_year) as release_year
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
+                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
+                WHERE s.album IS NOT NULL AND s.album != ''
+                GROUP BY s.album_id, s.album
+                ORDER BY song_count DESC, s.album
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    albums = []
+    for row in rows:
+        albums.append({
+            "album_id": row[0],
+            "title": row[1],
+            "song_count": row[2],
+            "artists": row[3] if row[3] else [],
+            "artist_ids": row[4] if row[4] else [],
+            "release_year": row[5],
+        })
+
+    return {"albums": albums, "total": len(albums)}
 
 
 @router.get("/albums/{album_id}")
@@ -2157,3 +2252,343 @@ async def pipeline_status(events_limit: int = 50) -> dict[str, Any]:
         state = dict(_pipeline_state)
     state["events"] = events
     return state
+
+
+# ============================================================================
+# Search and Similarity Endpoints
+# ============================================================================
+
+
+@router.get("/search")
+async def search_library(
+    q: str | None = None,
+    genre: str | None = None,
+    artist_id: int | None = None,
+    album_id: str | None = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict[str, Any]:
+    """Search the music library by text query, genre, artist, or album.
+
+    Args:
+        q: Text search query (searches title, artist, album)
+        genre: Filter by genre
+        artist_id: Filter by artist ID
+        album_id: Filter by album ID
+        limit: Maximum number of results
+        offset: Offset for pagination
+
+    Returns:
+        Dictionary with songs, total count, and query info
+    """
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 500")
+    if offset < 0:
+        raise HTTPException(status_code=400, detail="Offset must be >= 0")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # Build WHERE clause based on filters
+            where_clauses = []
+            params: list[Any] = []
+
+            if q:
+                # Text search across title, album, and artists
+                search_term = f"%{q}%"
+                where_clauses.append("""(
+                    s.title ILIKE %s
+                    OR s.album ILIKE %s
+                    OR EXISTS (
+                        SELECT 1 FROM metadata.song_artists sa
+                        JOIN metadata.artists a ON sa.artist_id = a.artist_id
+                        WHERE sa.sha_id = s.sha_id AND a.name ILIKE %s
+                    )
+                )""")
+                params.extend([search_term, search_term, search_term])
+
+            if genre:
+                where_clauses.append("s.genre ILIKE %s")
+                params.append(f"%{genre}%")
+
+            if artist_id:
+                where_clauses.append("""EXISTS (
+                    SELECT 1 FROM metadata.song_artists sa
+                    WHERE sa.sha_id = s.sha_id AND sa.artist_id = %s
+                )""")
+                params.append(artist_id)
+
+            if album_id:
+                where_clauses.append("s.album_id = %s")
+                params.append(album_id)
+
+            where_clause = "WHERE " + " AND ".join(where_clauses) if where_clauses else ""
+
+            # Count total results
+            count_query = f"""
+                SELECT COUNT(DISTINCT s.sha_id)
+                FROM metadata.songs s
+                {where_clause}
+            """
+            cur.execute(count_query, params)
+            total = cur.fetchone()[0]
+
+            # Get paginated results
+            query = f"""
+                SELECT DISTINCT ON (s.sha_id)
+                    s.sha_id,
+                    s.title,
+                    s.album,
+                    s.album_id,
+                    s.duration_sec,
+                    s.release_year,
+                    s.genre,
+                    array_agg(DISTINCT a.name ORDER BY a.name) FILTER (WHERE a.name IS NOT NULL) AS artists,
+                    array_agg(DISTINCT a.artist_id ORDER BY a.name) FILTER (WHERE a.artist_id IS NOT NULL) AS artist_ids,
+                    (SELECT sa2.artist_id FROM metadata.song_artists sa2 WHERE sa2.sha_id = s.sha_id AND sa2.is_primary LIMIT 1) AS primary_artist_id
+                FROM metadata.songs s
+                LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id
+                LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
+                {where_clause}
+                GROUP BY s.sha_id, s.title, s.album, s.album_id, s.duration_sec, s.release_year, s.genre
+                ORDER BY s.sha_id, s.title
+                LIMIT %s OFFSET %s
+            """
+            cur.execute(query, params + [limit, offset])
+            rows = cur.fetchall()
+
+    songs = []
+    for row in rows:
+        songs.append({
+            "sha_id": row[0],
+            "title": row[1],
+            "album": row[2],
+            "album_id": row[3],
+            "duration_sec": row[4],
+            "release_year": row[5],
+            "genre": row[6],
+            "artists": row[7] if row[7] else [],
+            "artist_ids": row[8] if row[8] else [],
+            "primary_artist_id": row[9],
+        })
+
+    return {
+        "songs": songs,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "query": {
+            "text": q,
+            "genre": genre,
+            "artist_id": artist_id,
+            "album_id": album_id,
+        },
+    }
+
+
+@router.get("/genres")
+async def list_genres(limit: int = 100) -> dict[str, Any]:
+    """List all genres in the library with song counts.
+
+    Args:
+        limit: Maximum number of genres to return
+
+    Returns:
+        List of genres with counts
+    """
+    if limit < 1 or limit > 500:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 500")
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT genre, COUNT(*) as count
+                FROM metadata.songs
+                WHERE genre IS NOT NULL AND genre != ''
+                GROUP BY genre
+                ORDER BY count DESC, genre
+                LIMIT %s
+                """,
+                (limit,),
+            )
+            rows = cur.fetchall()
+
+    genres = [{"name": row[0], "count": row[1]} for row in rows]
+
+    return {"genres": genres, "total": len(genres)}
+
+
+@router.get("/radio/song/{sha_id}")
+async def song_radio(
+    sha_id: str,
+    limit: int = 50,
+    metric: str = "cosine",
+    diversity: bool = True,
+) -> dict[str, Any]:
+    """Generate a song radio playlist based on similarity.
+
+    Args:
+        sha_id: Seed song SHA ID
+        limit: Number of songs in the radio playlist
+        metric: Similarity metric (cosine, euclidean, dot)
+        diversity: Apply diversity constraints to avoid too many songs from same album/artist
+
+    Returns:
+        Radio playlist with similar songs
+    """
+    from backend.processing.similarity_pipeline import pipeline as similarity_pipeline
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    if metric not in ("cosine", "euclidean", "dot"):
+        raise HTTPException(status_code=400, detail="Metric must be cosine, euclidean, or dot")
+
+    # Check if seed song exists
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sha_id, title FROM metadata.songs WHERE sha_id = %s",
+                (sha_id,),
+            )
+            seed_song = cur.fetchone()
+
+    if not seed_song:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    try:
+        songs = similarity_pipeline.generate_song_radio(
+            sha_id=sha_id,
+            limit=limit,
+            metric=metric,
+            apply_diversity=diversity,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate radio: {str(e)}")
+
+    return {
+        "seed_song": {
+            "sha_id": seed_song[0],
+            "title": seed_song[1],
+        },
+        "songs": songs,
+        "total": len(songs),
+        "metric": metric,
+        "diversity": diversity,
+    }
+
+
+@router.get("/radio/artist/{artist_id}")
+async def artist_radio(
+    artist_id: int,
+    limit: int = 50,
+    metric: str = "cosine",
+    diversity: bool = True,
+) -> dict[str, Any]:
+    """Generate an artist radio playlist based on similarity.
+
+    Args:
+        artist_id: Seed artist ID
+        limit: Number of songs in the radio playlist
+        metric: Similarity metric (cosine, euclidean, dot)
+        diversity: Apply diversity constraints
+
+    Returns:
+        Radio playlist with songs similar to the artist's style
+    """
+    from backend.processing.similarity_pipeline import pipeline as similarity_pipeline
+
+    if limit < 1 or limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    if metric not in ("cosine", "euclidean", "dot"):
+        raise HTTPException(status_code=400, detail="Metric must be cosine, euclidean, or dot")
+
+    # Check if artist exists
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT artist_id, name FROM metadata.artists WHERE artist_id = %s",
+                (artist_id,),
+            )
+            seed_artist = cur.fetchone()
+
+    if not seed_artist:
+        raise HTTPException(status_code=404, detail="Artist not found")
+
+    try:
+        songs = similarity_pipeline.generate_artist_radio(
+            artist_id=artist_id,
+            limit=limit,
+            metric=metric,
+            apply_diversity=diversity,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate radio: {str(e)}")
+
+    return {
+        "seed_artist": {
+            "artist_id": seed_artist[0],
+            "name": seed_artist[1],
+        },
+        "songs": songs,
+        "total": len(songs),
+        "metric": metric,
+        "diversity": diversity,
+    }
+
+
+@router.get("/similar/{sha_id}")
+async def similar_songs(
+    sha_id: str,
+    limit: int = 10,
+    metric: str = "cosine",
+) -> dict[str, Any]:
+    """Find songs similar to a given song.
+
+    Args:
+        sha_id: Seed song SHA ID
+        limit: Number of similar songs to return
+        metric: Similarity metric (cosine, euclidean, dot)
+
+    Returns:
+        List of similar songs with similarity scores
+    """
+    from backend.processing.similarity_pipeline import pipeline as similarity_pipeline
+
+    if limit < 1 or limit > 50:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 50")
+
+    if metric not in ("cosine", "euclidean", "dot"):
+        raise HTTPException(status_code=400, detail="Metric must be cosine, euclidean, or dot")
+
+    # Check if seed song exists
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT sha_id, title FROM metadata.songs WHERE sha_id = %s",
+                (sha_id,),
+            )
+            seed_song = cur.fetchone()
+
+    if not seed_song:
+        raise HTTPException(status_code=404, detail="Song not found")
+
+    try:
+        songs = similarity_pipeline.find_similar_songs(
+            sha_id=sha_id,
+            limit=limit,
+            metric=metric,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to find similar songs: {str(e)}")
+
+    return {
+        "seed_song": {
+            "sha_id": seed_song[0],
+            "title": seed_song[1],
+        },
+        "songs": songs,
+        "total": len(songs),
+        "metric": metric,
+    }

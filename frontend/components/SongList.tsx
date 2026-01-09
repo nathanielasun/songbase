@@ -2,7 +2,9 @@
 
 import Image from 'next/image';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon, QueueListIcon } from '@heroicons/react/24/solid';
+import { RadioIcon } from '@heroicons/react/24/outline';
 import { Song } from '@/lib/types';
 import { formatDuration } from '@/lib/mockData';
 
@@ -25,15 +27,23 @@ export default function SongList({
   onDownload,
   onAddToQueue,
 }: SongListProps) {
+  const router = useRouter();
+
+  const handleSongRadio = (song: Song, e: React.MouseEvent) => {
+    e.stopPropagation();
+    router.push(`/radio/song/${song.hashId}`);
+  };
+
   return (
     <div className="w-full">
       {/* Table Header */}
-      <div className="grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto] gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800">
+      <div className="grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto_auto] gap-4 px-4 py-2 text-sm text-gray-400 border-b border-gray-800">
         <div className="w-10">#</div>
         <div>Title</div>
         <div>Album</div>
         <div>Artist</div>
         <div>Duration</div>
+        <div className="w-10"></div>
         <div className="w-10"></div>
         <div className="w-10"></div>
         <div className="w-10"></div>
@@ -46,7 +56,7 @@ export default function SongList({
           return (
             <div
               key={song.id}
-              className={`grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto] gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
+              className={`grid grid-cols-[auto_3fr_2fr_2fr_1fr_auto_auto_auto_auto] gap-4 px-4 py-3 group hover:bg-gray-800 transition-colors cursor-pointer ${
                 isCurrentSong ? 'bg-gray-800' : ''
               }`}
               onClick={() => onSongClick(song)}
@@ -179,6 +189,17 @@ export default function SongList({
                     <PlusIcon className="w-5 h-5 text-gray-400 hover:text-white" />
                   </button>
                 )}
+              </div>
+
+              {/* Go to Song Radio */}
+              <div className="w-10 flex items-center justify-center">
+                <button
+                  onClick={(e) => handleSongRadio(song, e)}
+                  className="opacity-0 group-hover:opacity-100 transition-opacity"
+                  title="Go to song radio"
+                >
+                  <RadioIcon className="w-5 h-5 text-gray-400 hover:text-pink-500" />
+                </button>
               </div>
             </div>
           );

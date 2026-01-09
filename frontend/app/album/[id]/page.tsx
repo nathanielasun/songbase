@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon, RadioIcon } from '@heroicons/react/24/outline';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
@@ -48,6 +48,7 @@ const formatDuration = (seconds?: number | null) => {
 
 export default function AlbumPage() {
   const params = useParams();
+  const router = useRouter();
   const albumId = params.id as string;
   const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
   const { playlists, addSongToPlaylist, createPlaylist } = usePlaylist();
@@ -92,6 +93,9 @@ export default function AlbumPage() {
       album: albumData.title,
       albumId: albumData.album_id,
       duration: song.duration_sec ?? 0,
+      albumArt: albumData.album_id
+        ? `/api/library/images/album/${albumData.album_id}`
+        : `/api/library/images/song/${song.sha_id}`,
     }));
   }, [albumData]);
 
@@ -138,6 +142,12 @@ export default function AlbumPage() {
 
   const handleDownloadSong = (song: Song) => {
     console.log('Download song:', song.title, '(stub - will interface with backend)');
+  };
+
+  const handleArtistRadio = () => {
+    if (albumData.artist_id) {
+      router.push(`/radio/artist/${albumData.artist_id}`);
+    }
   };
 
   return (
@@ -200,6 +210,15 @@ export default function AlbumPage() {
         <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
           <PlayIcon className="w-6 h-6" />
         </button>
+        {albumData.artist_id && (
+          <button
+            onClick={handleArtistRadio}
+            className="bg-purple-600 hover:bg-purple-500 text-white rounded-full px-6 py-3 transition-colors shadow-lg flex items-center gap-2 font-semibold"
+          >
+            <RadioIcon className="w-5 h-5" />
+            Artist Radio
+          </button>
+        )}
         <button
           onClick={handleDownloadAlbum}
           className="text-gray-400 hover:text-pink-500 transition-colors"

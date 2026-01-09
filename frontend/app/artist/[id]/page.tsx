@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
+import { ArrowLeftIcon, PlayIcon, ArrowDownTrayIcon, RadioIcon } from '@heroicons/react/24/outline';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
 import AddToPlaylistModal from '@/components/AddToPlaylistModal';
@@ -55,6 +55,7 @@ const formatYear = (value?: number | null) => {
 
 export default function ArtistPage() {
   const params = useParams();
+  const router = useRouter();
   const artistId = params.id as string;
   const { currentSong, isPlaying, playSong, addToQueue } = useMusicPlayer();
   const { playlists, addSongToPlaylist, createPlaylist } = usePlaylist();
@@ -100,6 +101,9 @@ export default function ArtistPage() {
       album: song.album || undefined,
       albumId: song.album_id || undefined,
       duration: song.duration_sec ?? 0,
+      albumArt: song.album_id
+        ? `/api/library/images/album/${song.album_id}`
+        : `/api/library/images/song/${song.sha_id}`,
     }));
   }, [artistData]);
 
@@ -148,6 +152,10 @@ export default function ArtistPage() {
     console.log('Download song:', song.title, '(stub - will interface with backend)');
   };
 
+  const handleArtistRadio = () => {
+    router.push(`/radio/artist/${artistId}`);
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-b from-gray-900 to-black text-white pb-32">
       <div className="bg-gradient-to-b from-pink-900/40 to-transparent">
@@ -186,6 +194,13 @@ export default function ArtistPage() {
       <div className="px-8 py-4 flex items-center gap-4">
         <button className="bg-white hover:bg-gray-200 text-black rounded-full p-4 transition-colors shadow-lg">
           <PlayIcon className="w-6 h-6" />
+        </button>
+        <button
+          onClick={handleArtistRadio}
+          className="bg-purple-600 hover:bg-purple-500 text-white rounded-full px-6 py-3 transition-colors shadow-lg flex items-center gap-2 font-semibold"
+        >
+          <RadioIcon className="w-5 h-5" />
+          Go to Artist Radio
         </button>
       </div>
 

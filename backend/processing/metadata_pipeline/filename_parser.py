@@ -107,10 +107,25 @@ def _clean_text(text: str) -> str:
         # Remove common video suffixes at the end
         # Handle variants with leading underscores or spaces
         # e.g. " _Official_Visualizer", " Official Video"
-        text = re.sub(r"[\s_]*\b(M\s*V|MV|Music\s*Video|Official\s*Video|Official|Audio|Visualizer|Lyric\s*Video|Lyrics|Live|HD|HQ|4K|1080p|720p|Remaster(?:ed)?|Album\s*Version)\b[\s_]*$", "", text, flags=re.IGNORECASE)
+        # We explicitly match separators (space, underscore, dash, brackets) to handle cases where \b fails with underscores.
+        
+        tags_list = [
+            r"M[\s_]*V", r"MV", 
+            r"Music[\s_]*Video", r"Official[\s_]*Video", 
+            r"Official", r"Audio", r"Visualizer", r"Viewer", 
+            r"Lyric[\s_]*Video", r"Lyrics", r"Live", 
+            r"HD", r"HQ", r"4K", r"1080p", r"720p", 
+            r"Remaster(?:ed)?", r"Album[\s_]*Version"
+        ]
+        tags = "|".join(tags_list)
+        
+        # Pattern: (Separator)(TAG)(End or Separator)
+        # Note: We include the preceding separator in the replacement to remove it.
+        pattern = r"(?:[\s_\-\(\[]+)(" + tags + r")(?:[\s_\-\)\]]*)$"
+        text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
         # Remove brackets and their content at the end (often quality/format tags)
-        text = re.sub(r"\s*[\[\(]([^\]\)]*(?:kbps|hz|bit|320|256|192|128|quality|rip|official|audio|video|visualizer|lyric|live|hd|hq|4k|1080p|720p|remaster))[\]\)]\s*$", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*[\[\(]([^\]\)]*(?:kbps|hz|bit|320|256|192|128|quality|rip|official|audio|video|visualizer|viewer|lyric|live|hd|hq|4k|1080p|720p|remaster))[\]\)]\s*$", "", text, flags=re.IGNORECASE)
 
         # Remove year patterns (4 digits in parentheses/brackets) at the end
         text = re.sub(r"\s*[\[\(]\d{4}[\]\)]\s*$", "", text)

@@ -27,6 +27,7 @@ interface MusicPlayerProps {
   isPlaying: boolean;
   repeatMode: RepeatMode;
   shuffleEnabled: boolean;
+  playbackVersion: number;
   onPlayPause: () => void;
   onNext: () => void;
   onPrevious: () => void;
@@ -42,6 +43,7 @@ export default function MusicPlayer({
   isPlaying,
   repeatMode,
   shuffleEnabled,
+  playbackVersion,
   onPlayPause,
   onNext,
   onPrevious,
@@ -76,14 +78,14 @@ export default function MusicPlayer({
     repeatModeRef.current = repeatMode;
   }, [repeatMode]);
 
-  // Load audio source when song changes
+  // Load audio source when song changes or playback version changes
   useEffect(() => {
     if (!audioRef.current || !currentSong) return;
 
     const audio = audioRef.current;
     const streamUrl = `/api/library/stream/${currentSong.hashId}`;
 
-    console.log('Loading audio:', streamUrl);
+    console.log('Loading audio:', streamUrl, 'version:', playbackVersion);
 
     audio.pause();
     audio.src = streamUrl;
@@ -114,7 +116,7 @@ export default function MusicPlayer({
     return () => {
       audio.removeEventListener('loadedmetadata', handleLoadedMetadata);
     };
-  }, [currentSong?.hashId]);
+  }, [currentSong?.hashId, playbackVersion]);
 
   // Handle play/pause
   useEffect(() => {
@@ -233,7 +235,7 @@ export default function MusicPlayer({
       audio.removeEventListener('seeked', handleSeeked);
       audio.removeEventListener('error', handleError);
     };
-  }, []);
+  }, [currentSong]);
 
   const handleProgressChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!currentSong || !audioRef.current) return;
@@ -475,7 +477,7 @@ export default function MusicPlayer({
           max="100"
           value={isMuted ? 0 : volume}
           onChange={handleVolumeChange}
-          className="w-20 volume-slider"
+          className="w-6 volume-slider"
           style={{ '--volume-width': `${isMuted ? 0 : volume}%` } as React.CSSProperties}
         />
       </div>

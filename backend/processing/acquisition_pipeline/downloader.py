@@ -7,6 +7,7 @@ from typing import Any
 
 import yt_dlp
 
+from backend.processing.metadata_pipeline.filename_parser import _clean_text
 from . import config
 from .db import QueueItem
 

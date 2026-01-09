@@ -10,7 +10,7 @@ from typing import BinaryIO, Iterable
 from backend.processing import dependencies
 from backend.processing.audio_conversion_pipeline import config as conversion_config
 from backend.processing.audio_conversion_pipeline import converter
-from backend.processing.metadata_pipeline.filename_parser import parse_filename
+from backend.processing.metadata_pipeline.filename_parser import parse_filename, _clean_text
 
 from . import config, db, io
 
@@ -33,6 +33,10 @@ class ImportFailure:
 
 def _parse_filename(filename: str) -> tuple[str, str | None]:
     stem = Path(filename).stem or filename
+    
+    # Clean the stem before parsing to remove suffixes, IDs, etc.
+    stem = _clean_text(stem)
+    
     results = parse_filename(stem)
     if results:
         parsed = results[0]
