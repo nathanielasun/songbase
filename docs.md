@@ -22,7 +22,11 @@ songbase/
 │   │   │   ├── processing.py - Audio processing endpoints
 │   │   │   ├── library.py    - Metadata + queue + pipeline endpoints
 │   │   │   ├── settings.py   - Settings read/write endpoints
-│   │   │   └── acquisition.py - Acquisition backend configuration endpoints
+│   │   │   ├── acquisition.py - Acquisition backend configuration endpoints
+│   │   │   ├── playback.py   - Play session tracking endpoints
+│   │   │   ├── stats.py      - Listening statistics endpoints
+│   │   │   ├── stats_stream.py - WebSocket real-time stats streaming
+│   │   │   └── export.py     - Data export and share card endpoints
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
 │   ├── bootstrap.py     - Python dependency bootstrapper
@@ -34,7 +38,8 @@ songbase/
 │   │   │   ├── 003_add_download_queue.sql - Adds download queue table
 │   │   │   ├── 004_update_download_queue.sql - Adds queue tracking fields
 │   │   │   ├── 005_add_album_metadata.sql - Adds album metadata + track list tables
-│   │   │   └── 006_add_artist_fuzzy_matching.sql - Adds pg_trgm, artist variants, song counts
+│   │   │   ├── 006_add_artist_fuzzy_matching.sql - Adds pg_trgm, artist variants, song counts
+│   │   │   └── 007_add_play_history.sql - Adds play_sessions, play_events, listening_streaks tables
 │   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
@@ -101,6 +106,12 @@ songbase/
 │       ├── run_pipeline.py    - Orchestrator entrypoint with auto deps
 │       ├── pipeline_state.py  - Pipeline state JSONL utilities
 │       └── storage_utils.py   - Hashed cache path + atomic moves
+│   └── services/         # Business logic services
+│       ├── playback_tracker.py - Play session tracking service
+│       ├── stats_aggregator.py - Listening statistics aggregation service
+│       ├── play_history_signals.py - Behavioral signals from play history for recommendations
+│       ├── performance.py - Event batching, query caching, materialized view refresh
+│       └── data_retention.py - Data cleanup jobs and privacy controls
 ├── backend/tests/
 │   └── test_orchestrator_integration.py - End-to-end pipeline smoke test (opt-in)
 ├── scripts/
@@ -175,6 +186,18 @@ songbase/
 - **Uses**: `/api/library/playlist/preferences` (POST)
 - **Notes**: Generates playlists by computing embedding centroids of liked songs and penalizing similarity to disliked songs
 
+### frontend/app/stats/page.tsx
+- **Purpose**: Listening statistics and analytics dashboard
+- **Uses**: `/api/stats/overview`, `/api/stats/top-songs`, `/api/stats/top-artists`, `/api/stats/heatmap`, `/api/stats/history`
+- **Features**:
+  - Period selector (Week/Month/Year/All Time)
+  - Overview cards (total plays, time listened, unique songs, listening streak)
+  - Top songs chart with play counts and inline play buttons
+  - Top artists chart with links to artist pages
+  - Listening heatmap showing activity by day of week and hour
+  - Recent play history with completion/skip status
+- **Notes**: All playback is automatically tracked via MusicPlayerContext integration
+
 ### frontend/app/playlist/liked/page.tsx
 - **Purpose**: Dedicated playlist page for all liked songs
 - **Uses**: `/api/library/songs/{sha_id}` to fetch song details for each liked song ID
@@ -186,6 +209,29 @@ songbase/
   - Remove (unlike) songs directly from the playlist
   - Add songs to other playlists via modal
 - **Notes**: Liked song IDs come from `UserPreferencesContext` (localStorage); song details are fetched from backend
+
+### frontend/components/stats/ShareCard.tsx
+- **Purpose**: Shareable listening stats card component for social sharing
+- **Features**:
+  - Supports multiple card types: overview, top-song, top-artist, wrapped
+  - Generates formatted text summary for clipboard sharing
+  - Gradient styling with stats visualization
+  - Close button for modal overlay
+- **Usage**:
+  ```tsx
+  import ShareCard, { fetchShareCardData } from '@/components/stats/ShareCard';
+
+  // Fetch card data
+  const data = await fetchShareCardData('top-song', 'month');
+
+  // Render card
+  <ShareCard data={data} onClose={() => setShowCard(false)} />
+  ```
+- **Card Types**:
+  - `overview`: General stats grid (plays, minutes, unique songs)
+  - `top-song`: Featured song with play count
+  - `top-artist`: Featured artist with play count and song count
+  - `wrapped`: Year-in-review with top song, artist, and personality
 
 ### frontend/contexts/UserPreferencesContext.tsx
 - **Purpose**: Client-side storage of user preferences (likes/dislikes)
@@ -227,7 +273,7 @@ try {
   - CORS middleware (allows requests from http://localhost:3000)
   - Auto-generated OpenAPI docs at `/docs`
   - Health check endpoint at `/health`
-  - Routes organized by domain (processing, library, settings, acquisition)
+  - Routes organized by domain (processing, library, settings, acquisition, playback, stats, stats_stream, export)
   - Auto-bootstraps local Postgres if database URLs are missing
 
 ### backend/api/routes/processing.py
@@ -277,6 +323,7 @@ try {
   - `GET /api/library/radio/artist/{artist_id}`: Generate artist radio playlist based on average artist embedding
   - `GET /api/library/similar/{sha_id}`: Find songs similar to a given song
   - `POST /api/library/playlist/preferences`: Generate personalized playlist from liked/disliked songs
+  - `POST /api/library/playlist/enhanced-for-you`: Generate enhanced personalized playlist combining explicit preferences with play history signals
 - **Usage**:
   ```bash
   curl -X POST http://localhost:8000/api/library/queue \
@@ -299,6 +346,11 @@ try {
   curl -X POST http://localhost:8000/api/library/playlist/preferences \
     -H "Content-Type: application/json" \
     -d '{"liked_song_ids":["sha_id_1","sha_id_2"],"disliked_song_ids":["sha_id_3"],"limit":50}'
+
+  # Generate enhanced playlist with play history signals
+  curl -X POST http://localhost:8000/api/library/playlist/enhanced-for-you \
+    -H "Content-Type: application/json" \
+    -d '{"liked_song_ids":["sha_id_1"],"disliked_song_ids":[],"limit":50,"use_play_history":true,"history_days":30}'
   ```
 
 ### backend/api/routes/acquisition.py
@@ -333,6 +385,13 @@ try {
   - `PUT /api/settings/vggish`: Update VGGish configuration parameters
   - `GET /api/settings/vggish/recalculate-stream`: Recalculate embeddings (SSE stream with live progress)
   - `POST /api/settings/vggish/recalculate/stop`: Stop an active embedding recalculation
+  - `GET /api/settings/performance`: Get performance metrics (cache size, pending events, view refresh status)
+  - `POST /api/settings/performance/refresh-views`: Trigger immediate refresh of materialized views
+  - `POST /api/settings/performance/clear-cache`: Clear the query cache
+  - `GET /api/settings/retention`: Get data retention policy and summary
+  - `POST /api/settings/retention/cleanup`: Run cleanup of old data based on retention policy
+  - `POST /api/settings/retention/delete-all`: Delete ALL play history (requires `confirm: "DELETE_ALL"`)
+  - `DELETE /api/settings/retention/song/{sha_id}`: Delete play history for a specific song
 - **Usage**:
   ```bash
   curl http://localhost:8000/api/settings
@@ -354,7 +413,226 @@ try {
 
   # Stop embedding recalculation
   curl -X POST http://localhost:8000/api/settings/vggish/recalculate/stop
+
+  # Get performance metrics
+  curl http://localhost:8000/api/settings/performance
+
+  # Refresh materialized views
+  curl -X POST http://localhost:8000/api/settings/performance/refresh-views
+
+  # Clear query cache
+  curl -X POST http://localhost:8000/api/settings/performance/clear-cache
+
+  # Get data retention policy and summary
+  curl http://localhost:8000/api/settings/retention
+
+  # Run cleanup based on retention policy
+  curl -X POST http://localhost:8000/api/settings/retention/cleanup
+
+  # Delete ALL play history (destructive!)
+  curl -X POST http://localhost:8000/api/settings/retention/delete-all \
+    -H "Content-Type: application/json" \
+    -d '{"confirm":"DELETE_ALL"}'
+
+  # Delete play history for a specific song
+  curl -X DELETE http://localhost:8000/api/settings/retention/song/{sha_id}
   ```
+
+### backend/api/routes/playback.py
+- **Purpose**: Track play sessions and listening events for analytics
+- **Endpoints**:
+  - `POST /api/play/start`: Start a new play session when a song begins playing
+  - `POST /api/play/event`: Record events within a session (pause, resume, seek, skip)
+  - `POST /api/play/complete`: Mark a session as completed (song finished naturally)
+  - `POST /api/play/end`: End a session (skip, next song, page close)
+  - `GET /api/play/session/{session_id}`: Get session details
+  - `GET /api/play/streak`: Get current listening streak info
+- **Session Lifecycle**:
+  1. Frontend calls `/start` when playback begins → receives `session_id`
+  2. Frontend calls `/event` for pause, resume, seek actions
+  3. Frontend calls `/complete` if song finishes naturally (>80% played)
+  4. Frontend calls `/end` if user skips or navigates away
+- **Completion Thresholds**:
+  - **Completed**: ≥80% of song duration played
+  - **Skipped**: <30% played and reason is "next_song"
+- **Usage**:
+  ```bash
+  # Start a play session
+  curl -X POST http://localhost:8000/api/play/start \
+    -H "Content-Type: application/json" \
+    -d '{"sha_id":"abc123...","context_type":"radio","context_id":"song_xyz"}'
+
+  # Record a pause event
+  curl -X POST http://localhost:8000/api/play/event \
+    -H "Content-Type: application/json" \
+    -d '{"session_id":"uuid","event_type":"pause","position_ms":45000}'
+
+  # Complete a session (song finished)
+  curl -X POST http://localhost:8000/api/play/complete \
+    -H "Content-Type: application/json" \
+    -d '{"session_id":"uuid","final_position_ms":180000}'
+
+  # End a session (user skipped)
+  curl -X POST http://localhost:8000/api/play/end \
+    -H "Content-Type: application/json" \
+    -d '{"session_id":"uuid","final_position_ms":30000,"reason":"next_song"}'
+
+  # Get current streak
+  curl http://localhost:8000/api/play/streak
+  ```
+
+### backend/api/routes/stats.py
+- **Purpose**: Retrieve listening statistics and analytics from play history
+- **Endpoints**:
+  - `GET /api/stats/overview`: High-level listening statistics (total plays, duration, unique songs/artists, streak info)
+  - `GET /api/stats/top-songs`: Most played songs for a period
+  - `GET /api/stats/top-artists`: Most played artists for a period
+  - `GET /api/stats/top-albums`: Most played albums for a period
+  - `GET /api/stats/history`: Paginated play history with song details
+  - `GET /api/stats/heatmap`: Listening activity heatmap by day of week and hour
+  - `GET /api/stats/genres`: Genre breakdown with play counts and percentages
+  - `GET /api/stats/trends`: Compare current period to previous period (percentage changes)
+  - `GET /api/stats/wrapped/{year}`: Year-in-review summary (similar to Spotify Wrapped)
+  - `POST /api/stats/refresh-daily`: Refresh the daily listening stats materialized view
+- **Period Formats**: Endpoints accepting `period` parameter support:
+  - `week`, `month`, `year`, `all` - Relative periods
+  - `YYYY` - Specific year (e.g., "2024")
+  - `YYYY-MM` - Specific month (e.g., "2024-06")
+- **Usage**:
+  ```bash
+  # Get overview stats for current month
+  curl "http://localhost:8000/api/stats/overview?period=month"
+
+  # Get top 20 songs for 2024
+  curl "http://localhost:8000/api/stats/top-songs?period=2024&limit=20"
+
+  # Get top artists for all time
+  curl "http://localhost:8000/api/stats/top-artists?period=all&limit=10"
+
+  # Get play history (paginated)
+  curl "http://localhost:8000/api/stats/history?limit=50&offset=0"
+
+  # Get listening heatmap for current year
+  curl "http://localhost:8000/api/stats/heatmap"
+
+  # Get genre breakdown for current month
+  curl "http://localhost:8000/api/stats/genres?period=month"
+
+  # Get trends comparing this week to last week
+  curl "http://localhost:8000/api/stats/trends?period=week"
+
+  # Get 2024 Wrapped summary
+  curl "http://localhost:8000/api/stats/wrapped/2024"
+
+  # Refresh daily stats materialized view
+  curl -X POST http://localhost:8000/api/stats/refresh-daily
+  ```
+
+### backend/api/routes/stats_stream.py
+- **Purpose**: Real-time WebSocket endpoint for live listening statistics
+- **Endpoints**:
+  - `WebSocket /api/stats/stream/live`: WebSocket connection for real-time stats updates
+- **Message Types** (from server):
+  - `stats_update`: Current listening statistics (sent on connect and periodically)
+  - `play_started`: A song started playing (includes song details)
+  - `play_completed`: A song finished playing
+  - `play_skipped`: A song was skipped
+- **Features**:
+  - Broadcasts play events to all connected clients
+  - Automatic stats refresh every 30 seconds
+  - Connection management with proper cleanup
+- **Usage**:
+  ```javascript
+  // Frontend WebSocket connection
+  const ws = new WebSocket('ws://localhost:8000/api/stats/stream/live');
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    switch (data.type) {
+      case 'stats_update':
+        console.log('Stats:', data.stats);
+        break;
+      case 'play_started':
+        console.log('Now playing:', data.song);
+        break;
+      case 'play_completed':
+        console.log('Finished:', data.session_id);
+        break;
+    }
+  };
+  ```
+
+### backend/api/routes/export.py
+- **Purpose**: Export listening history and statistics in various formats
+- **Endpoints**:
+  - `GET /api/export/history`: Export play history as JSON or CSV
+  - `GET /api/export/stats`: Export statistics summary as JSON
+  - `GET /api/export/wrapped/{year}`: Export year-in-review data as JSON
+  - `GET /api/export/share-card`: Generate shareable listening stats card data
+- **Query Parameters** (for history):
+  - `format`: `json` (default) or `csv`
+  - `period`: `week`, `month`, `year`, `all`, or specific date (`YYYY`, `YYYY-MM`)
+  - `limit`: Maximum records to export (default: 1000)
+  - `offset`: Pagination offset
+- **Share Card Types**:
+  - `overview`: General listening stats
+  - `top-song`: Top song for the period
+  - `top-artist`: Top artist for the period
+  - `wrapped`: Year-in-review summary
+- **Usage**:
+  ```bash
+  # Export play history as JSON
+  curl "http://localhost:8000/api/export/history?period=month&limit=500"
+
+  # Export play history as CSV
+  curl "http://localhost:8000/api/export/history?format=csv&period=2024" > history.csv
+
+  # Export stats summary
+  curl "http://localhost:8000/api/export/stats?period=year"
+
+  # Export 2024 wrapped data
+  curl "http://localhost:8000/api/export/wrapped/2024"
+
+  # Generate share card data
+  curl "http://localhost:8000/api/export/share-card?type=top-song&period=month"
+  ```
+
+### backend/services/play_history_signals.py
+- **Purpose**: Extract behavioral signals from play history to enhance recommendations
+- **Key Functions**:
+  - `get_frequently_played_songs(days, min_plays)`: Songs played multiple times
+  - `get_recently_played_songs(days, limit)`: Recently listened songs
+  - `get_often_skipped_songs(days, min_skips)`: Songs frequently skipped
+  - `get_completed_songs(days, min_completions)`: Songs listened to completion
+  - `calculate_implicit_preference_score(sha_id, days)`: Combined preference score from play behavior
+- **Used By**: Enhanced For You playlist generation in similarity_pipeline
+
+### backend/services/performance.py
+- **Purpose**: Performance optimization utilities for database operations
+- **Components**:
+  - **EventBuffer**: Batches play events before database insertion (reduces write load)
+  - **QueryCache**: TTL-based in-memory cache for expensive queries
+  - **MaterializedViewRefresher**: Scheduled background refresh of aggregated stats
+- **Key Functions**:
+  - `get_event_buffer()`: Singleton event buffer with auto-flush
+  - `get_query_cache()`: Singleton query cache (60s default TTL)
+  - `@cached(ttl, key_prefix)`: Decorator for caching function results
+  - `get_performance_metrics()`: Current performance stats for monitoring
+
+### backend/services/data_retention.py
+- **Purpose**: Data cleanup and privacy controls for play history
+- **Default Retention Policies**:
+  - Play events: 90 days
+  - Play sessions: 365 days
+  - Aggregate stats: 1825 days (5 years)
+- **Key Functions**:
+  - `cleanup_old_events()`: Delete events older than retention period
+  - `cleanup_old_sessions()`: Delete sessions older than retention period
+  - `run_full_cleanup()`: Run all cleanup tasks
+  - `delete_all_history()`: Complete privacy reset (destructive)
+  - `delete_history_for_song(sha_id)`: Remove history for specific song
+  - `get_data_summary()`: Storage usage and retention policy info
+- **Background Task**: Automatic periodic cleanup (default: every 24 hours)
 
 ### backend/app_settings.py
 - **Purpose**: Load/store UI settings under `.metadata/settings.json`
@@ -503,12 +781,24 @@ try {
   - `generate_artist_radio(artist_id, limit, metric, apply_diversity)`: Generate radio from artist's average embedding
   - `find_similar_songs(sha_id, limit, metric)`: Find songs similar to a given song
   - `generate_preference_playlist(liked_sha_ids, disliked_sha_ids, limit, metric, apply_diversity, dislike_weight)`: Generate personalized playlist using user preferences
+  - `generate_enhanced_for_you(liked_sha_ids, disliked_sha_ids, limit, history_days)`: Enhanced playlist combining explicit preferences with play history signals
 - **Preference Playlist Algorithm**:
   1. Compute average embedding of liked songs (attraction centroid)
   2. Compute average embedding of disliked songs (repulsion centroid)
   3. For each candidate song: `score = like_similarity - (dislike_weight × dislike_similarity)`
   4. Apply diversity constraints (max songs per artist/album)
   5. Return top-scoring songs
+- **Enhanced For You Algorithm** (combines explicit + implicit signals):
+  1. Gather behavioral signals from play history:
+     - Frequently played songs (weight: 0.8)
+     - Completed songs (weight: 0.7)
+     - Skipped songs (negative weight: -0.5)
+  2. Compute weighted centroid combining:
+     - Explicit likes (weight: 1.0)
+     - Play history signals (weights above)
+     - Explicit dislikes (weight: -1.0)
+  3. Score candidates against weighted centroid
+  4. Apply diversity constraints and return top results
 
 ### backend/processing/dependencies.py
 - **Purpose**: Central routine for ensuring local package dependencies (models, assets, binaries).

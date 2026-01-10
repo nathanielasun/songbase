@@ -1,7 +1,14 @@
 'use client';
 
-import { createContext, useContext, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react';
 import { Song, RepeatMode } from '@/lib/types';
+
+// Playback tracking types
+interface PlayContext {
+  type: 'radio' | 'playlist' | 'album' | 'artist' | 'search' | 'queue' | 'for-you' | 'liked';
+  id: string;
+  name?: string;
+}
 
 function shuffleArray<T>(array: T[]): T[] {
   const shuffled = [...array];
@@ -22,7 +29,9 @@ interface MusicPlayerContextType {
   shuffleEnabled: boolean;
   toastMessage: string | null;
   playbackVersion: number;
-  playSong: (song: Song, songList?: Song[]) => void;
+  playContext: PlayContext | null;
+  currentSessionId: string | null;
+  playSong: (song: Song, songList?: Song[], context?: PlayContext) => void;
   togglePlayPause: () => void;
   playNext: () => void;
   playPrevious: () => void;
@@ -36,6 +45,13 @@ interface MusicPlayerContextType {
   clearQueue: () => void;
   playFromQueue: (index: number) => void;
   clearToast: () => void;
+  // Playback tracking methods
+  trackPlayStart: (positionMs: number) => void;
+  trackPause: (positionMs: number) => void;
+  trackResume: (positionMs: number) => void;
+  trackSeek: (positionMs: number) => void;
+  trackSongComplete: (positionMs: number) => void;
+  trackSongEnd: (positionMs: number, reason: string) => void;
 }
 
 const MusicPlayerContext = createContext<MusicPlayerContextType | undefined>(undefined);
@@ -52,7 +68,167 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [playbackVersion, setPlaybackVersion] = useState(0);
 
-  const playSong = useCallback((song: Song, songList?: Song[]) => {
+  // Playback tracking state
+  const [playContext, setPlayContext] = useState<PlayContext | null>(null);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const sessionIdRef = useRef<string | null>(null);
+
+  // Keep ref in sync with state for use in beforeunload
+  useEffect(() => {
+    sessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
+
+  // Handle page unload - send beacon to end session
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (sessionIdRef.current) {
+        const payload = JSON.stringify({
+          session_id: sessionIdRef.current,
+          final_position_ms: 0, // We don't have access to exact position here
+          reason: 'page_close',
+        });
+        navigator.sendBeacon('/api/play/end', payload);
+      }
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
+  }, []);
+
+  // Playback tracking methods
+  const trackPlayStart = useCallback(async (positionMs: number) => {
+    if (!currentSong) return;
+
+    // End previous session if exists
+    if (currentSessionId) {
+      try {
+        await fetch('/api/play/end', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            session_id: currentSessionId,
+            final_position_ms: positionMs,
+            reason: 'next_song',
+          }),
+        });
+      } catch (e) {
+        console.error('Failed to end previous session:', e);
+      }
+    }
+
+    try {
+      const response = await fetch('/api/play/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sha_id: currentSong.hashId,
+          context_type: playContext?.type,
+          context_id: playContext?.id,
+          position_ms: positionMs,
+        }),
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        setCurrentSessionId(data.session_id);
+      }
+    } catch (e) {
+      console.error('Failed to start play session:', e);
+    }
+  }, [currentSong, currentSessionId, playContext]);
+
+  const trackPause = useCallback(async (positionMs: number) => {
+    if (!currentSessionId) return;
+
+    try {
+      await fetch('/api/play/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          event_type: 'pause',
+          position_ms: positionMs,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to track pause:', e);
+    }
+  }, [currentSessionId]);
+
+  const trackResume = useCallback(async (positionMs: number) => {
+    if (!currentSessionId) return;
+
+    try {
+      await fetch('/api/play/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          event_type: 'resume',
+          position_ms: positionMs,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to track resume:', e);
+    }
+  }, [currentSessionId]);
+
+  const trackSeek = useCallback(async (positionMs: number) => {
+    if (!currentSessionId) return;
+
+    try {
+      await fetch('/api/play/event', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          event_type: 'seek',
+          position_ms: positionMs,
+        }),
+      });
+    } catch (e) {
+      console.error('Failed to track seek:', e);
+    }
+  }, [currentSessionId]);
+
+  const trackSongComplete = useCallback(async (positionMs: number) => {
+    if (!currentSessionId) return;
+
+    try {
+      await fetch('/api/play/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          final_position_ms: positionMs,
+        }),
+      });
+      setCurrentSessionId(null);
+    } catch (e) {
+      console.error('Failed to track song complete:', e);
+    }
+  }, [currentSessionId]);
+
+  const trackSongEnd = useCallback(async (positionMs: number, reason: string) => {
+    if (!currentSessionId) return;
+
+    try {
+      await fetch('/api/play/end', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          session_id: currentSessionId,
+          final_position_ms: positionMs,
+          reason,
+        }),
+      });
+      setCurrentSessionId(null);
+    } catch (e) {
+      console.error('Failed to track song end:', e);
+    }
+  }, [currentSessionId]);
+
+  const playSong = useCallback((song: Song, songList?: Song[], context?: PlayContext) => {
     if (currentSong?.id === song.id) {
       setIsPlaying(!isPlaying);
     } else {
@@ -66,6 +242,13 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
       setOriginalQueue(newQueue);
       setCurrentIndex(songIndex);
       setPlaybackVersion(prev => prev + 1);
+
+      // Set play context for tracking
+      if (context) {
+        setPlayContext(context);
+      } else {
+        setPlayContext(null);
+      }
     }
   }, [currentSong, isPlaying, shuffleEnabled]);
 
@@ -251,6 +434,8 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         shuffleEnabled,
         toastMessage,
         playbackVersion,
+        playContext,
+        currentSessionId,
         playSong,
         togglePlayPause,
         playNext,
@@ -265,6 +450,12 @@ export function MusicPlayerProvider({ children }: { children: ReactNode }) {
         clearQueue,
         playFromQueue,
         clearToast,
+        trackPlayStart,
+        trackPause,
+        trackResume,
+        trackSeek,
+        trackSongComplete,
+        trackSongEnd,
       }}
     >
       {children}

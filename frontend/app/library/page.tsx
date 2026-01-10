@@ -1879,23 +1879,13 @@ export default function LibraryPage() {
             {activeTab === 'downloads' && (
               <div className="space-y-6">
                 {/* Acquisition Backend Configuration */}
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex flex-wrap items-center justify-between gap-4 mb-4">
-                    <button
-                      onClick={() => setIsBackendCollapsed(!isBackendCollapsed)}
-                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-                    >
-                      <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Acquisition Backend</h2>
-                      {isBackendCollapsed ? (
-                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
-                      ) : (
-                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
-                      )}
-                    </button>
-                  </div>
-
-                  {!isBackendCollapsed && acquisitionSettings && (
+                <CollapsiblePanel
+                  title="Acquisition Backend"
+                  icon={<ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />}
+                  isCollapsed={isBackendCollapsed}
+                  onToggle={() => setIsBackendCollapsed(!isBackendCollapsed)}
+                >
+                  {acquisitionSettings && (
                     <div className="space-y-4 text-sm text-gray-300">
                       <div>
                         <p className="mb-3 text-gray-400">
@@ -2007,22 +1997,14 @@ export default function LibraryPage() {
                       </div>
                     </div>
                   )}
-                </section>
+                </CollapsiblePanel>
 
-                <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center justify-between flex-wrap gap-4">
-                    <button
-                      onClick={() => setIsPipelineCollapsed(!isPipelineCollapsed)}
-                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-                    >
-                      <PlayIcon className="h-5 w-5 text-gray-300" />
-                      <h2 className="text-xl font-semibold">Run Pipeline</h2>
-                      {isPipelineCollapsed ? (
-                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
-                      ) : (
-                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
-                      )}
-                    </button>
+                <CollapsibleSection
+                  title="Run Pipeline"
+                  icon={<PlayIcon className="h-5 w-5 text-gray-300" />}
+                  isCollapsed={isPipelineCollapsed}
+                  onToggle={() => setIsPipelineCollapsed(!isPipelineCollapsed)}
+                  headerRight={
                     <span
                       className={`rounded-full px-3 py-1 text-xs font-semibold ${
                         pipelineStatus.running ? 'bg-green-500/20 text-green-200' : 'bg-gray-800 text-gray-300'
@@ -2030,11 +2012,9 @@ export default function LibraryPage() {
                     >
                       {pipelineStatus.running ? 'Running' : 'Idle'}
                     </span>
-                  </div>
-
-                  {!isPipelineCollapsed && (
-                    <>
-                      <div className="grid gap-4 mt-5 md:grid-cols-2">
+                  }
+                >
+                      <div className="grid gap-4 md:grid-cols-2">
                     <label className="text-sm text-gray-300">
                       Download limit
                       <input
@@ -2217,31 +2197,34 @@ export default function LibraryPage() {
                       </div>
                     </div>
                   )}
-                    </>
-                  )}
-                </section>
+                </CollapsibleSection>
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
-                  <div className="flex items-center justify-between flex-wrap gap-4">
-                    <button
-                      onClick={() => setIsQueueCollapsed(!isQueueCollapsed)}
-                      className="flex items-center gap-3 hover:opacity-80 transition-opacity"
-                    >
-                      <ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <QueueListIcon className="h-5 w-5 text-gray-300" />
                       <h2 className="text-xl font-semibold">Queue Status</h2>
-                      {isQueueCollapsed ? (
-                        <ChevronDownIcon className="h-5 w-5 text-gray-400" />
-                      ) : (
-                        <ChevronUpIcon className="h-5 w-5 text-gray-400" />
-                      )}
-                    </button>
-                    <button
-                      onClick={handleClearQueue}
-                      disabled={busy}
-                      className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
-                    >
-                      Clear pipeline queue
-                    </button>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={handleClearQueue}
+                        disabled={busy}
+                        className="rounded-full border border-red-500/40 bg-red-500/10 px-3 py-1 text-xs font-semibold text-red-100 hover:bg-red-500/20 disabled:opacity-50"
+                      >
+                        Clear pipeline queue
+                      </button>
+                      <button
+                        onClick={() => setIsQueueCollapsed(!isQueueCollapsed)}
+                        className="rounded-full p-1 text-gray-400 hover:text-white"
+                        title={isQueueCollapsed ? "Expand" : "Collapse"}
+                      >
+                        {isQueueCollapsed ? (
+                          <ChevronDownIcon className="h-5 w-5" />
+                        ) : (
+                          <ChevronUpIcon className="h-5 w-5" />
+                        )}
+                      </button>
+                    </div>
                   </div>
                   <div className="flex flex-wrap gap-3 mt-4 text-xs font-semibold text-gray-200">
                     {Object.entries(stats.queue).length === 0 && (
@@ -2363,7 +2346,7 @@ export default function LibraryPage() {
                   )}
                 </section>
 
-                <CollapsibleSection
+                <CollapsiblePanel
                   title="Recent Activity"
                   icon={<QueueListIcon className="h-5 w-5 text-gray-300" />}
                   isCollapsed={isRecentActivityCollapsed}
@@ -2392,7 +2375,7 @@ export default function LibraryPage() {
                       </div>
                     ))}
                   </div>
-                </CollapsibleSection>
+                </CollapsiblePanel>
               </div>
             )}
 

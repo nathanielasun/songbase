@@ -513,3 +513,134 @@ async def stop_embedding_recalculation() -> dict[str, Any]:
 
     _embedding_task_state["stop_requested"] = True
     return {"status": "stop_requested"}
+
+
+@router.get("/performance")
+async def get_performance_metrics() -> dict[str, Any]:
+    """Get performance metrics for the system."""
+    from backend.services.performance import get_performance_metrics as get_metrics
+
+    return get_metrics()
+
+
+@router.post("/performance/refresh-views")
+async def trigger_materialized_view_refresh() -> dict[str, Any]:
+    """Manually trigger a materialized view refresh."""
+    from backend.services.performance import get_view_refresher
+
+    refresher = get_view_refresher()
+    success = refresher.refresh_now()
+
+    return {
+        "success": success,
+        "last_refresh": refresher.last_refresh.isoformat() if refresher.last_refresh else None,
+    }
+
+
+@router.post("/performance/clear-cache")
+async def clear_query_cache() -> dict[str, Any]:
+    """Clear the query cache."""
+    from backend.services.performance import get_query_cache
+
+    cache = get_query_cache()
+    cache.clear()
+
+    return {"success": True, "message": "Query cache cleared"}
+
+
+# ============================================================================
+# Data Retention & Privacy
+# ============================================================================
+
+class RetentionPolicyUpdate(BaseModel):
+    play_events_days: int | None = None
+    play_sessions_days: int | None = None
+    aggregate_stats_days: int | None = None
+
+
+@router.get("/retention")
+async def get_retention_info() -> dict[str, Any]:
+    """Get data retention information and current policy."""
+    from backend.services.data_retention import get_retention_service
+
+    service = get_retention_service()
+    return service.get_data_summary()
+
+
+@router.put("/retention")
+async def update_retention_policy(policy: RetentionPolicyUpdate) -> dict[str, Any]:
+    """Update the data retention policy."""
+    from backend.services.data_retention import configure_retention_service
+
+    service = configure_retention_service(
+        play_events_days=policy.play_events_days,
+        play_sessions_days=policy.play_sessions_days,
+        aggregate_stats_days=policy.aggregate_stats_days,
+    )
+
+    return {
+        "success": True,
+        "policy": {
+            "play_events_days": service.play_events_days,
+            "play_sessions_days": service.play_sessions_days,
+            "aggregate_stats_days": service.aggregate_stats_days,
+        },
+    }
+
+
+@router.post("/retention/cleanup")
+async def trigger_data_cleanup() -> dict[str, Any]:
+    """Manually trigger a data cleanup based on current retention policy."""
+    from backend.services.data_retention import get_retention_service
+
+    service = get_retention_service()
+    results = service.run_full_cleanup()
+
+    return {
+        "success": True,
+        "deleted": results,
+    }
+
+
+class DeleteHistoryRequest(BaseModel):
+    confirm: str  # Must be "DELETE_ALL_HISTORY" to confirm
+
+
+@router.post("/retention/delete-all")
+async def delete_all_play_history(request: DeleteHistoryRequest) -> dict[str, Any]:
+    """
+    Delete ALL play history data. This cannot be undone.
+
+    Requires confirmation string "DELETE_ALL_HISTORY".
+    """
+    from backend.services.data_retention import get_retention_service
+
+    if request.confirm != "DELETE_ALL_HISTORY":
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid confirmation. Send confirm='DELETE_ALL_HISTORY' to proceed."
+        )
+
+    service = get_retention_service()
+    results = service.delete_all_history()
+
+    return {
+        "success": True,
+        "deleted": results,
+        "warning": "All play history has been permanently deleted.",
+    }
+
+
+@router.delete("/retention/song/{sha_id}")
+async def delete_song_history(sha_id: str) -> dict[str, Any]:
+    """Delete play history for a specific song."""
+    from backend.services.data_retention import get_retention_service
+
+    service = get_retention_service()
+    results = service.delete_history_for_song(sha_id)
+
+    return {
+        "success": True,
+        "sha_id": sha_id,
+        "deleted": results,
+    }

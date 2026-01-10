@@ -38,6 +38,13 @@ interface MusicPlayerProps {
   onLike: (songId: string) => void;
   onDislike: (songId: string) => void;
   onSongEnd?: () => void;
+  // Playback tracking callbacks
+  onTrackPlayStart?: (positionMs: number) => void;
+  onTrackPause?: (positionMs: number) => void;
+  onTrackResume?: (positionMs: number) => void;
+  onTrackSeek?: (positionMs: number) => void;
+  onTrackComplete?: (positionMs: number) => void;
+  onTrackEnd?: (positionMs: number, reason: string) => void;
 }
 
 export default function MusicPlayer({
@@ -54,6 +61,12 @@ export default function MusicPlayer({
   onLike,
   onDislike,
   onSongEnd,
+  onTrackPlayStart,
+  onTrackPause,
+  onTrackResume,
+  onTrackSeek,
+  onTrackComplete,
+  onTrackEnd,
 }: MusicPlayerProps) {
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -64,6 +77,16 @@ export default function MusicPlayer({
   const onSongEndRef = useRef(onSongEnd);
   const isPlayingRef = useRef(isPlaying);
   const repeatModeRef = useRef(repeatMode);
+  const hasStartedTrackingRef = useRef(false);
+  const wasPlayingRef = useRef(false);
+
+  // Tracking callback refs
+  const onTrackPlayStartRef = useRef(onTrackPlayStart);
+  const onTrackPauseRef = useRef(onTrackPause);
+  const onTrackResumeRef = useRef(onTrackResume);
+  const onTrackSeekRef = useRef(onTrackSeek);
+  const onTrackCompleteRef = useRef(onTrackComplete);
+  const onTrackEndRef = useRef(onTrackEnd);
 
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
@@ -80,6 +103,16 @@ export default function MusicPlayer({
     repeatModeRef.current = repeatMode;
   }, [repeatMode]);
 
+  // Keep tracking refs updated
+  useEffect(() => {
+    onTrackPlayStartRef.current = onTrackPlayStart;
+    onTrackPauseRef.current = onTrackPause;
+    onTrackResumeRef.current = onTrackResume;
+    onTrackSeekRef.current = onTrackSeek;
+    onTrackCompleteRef.current = onTrackComplete;
+    onTrackEndRef.current = onTrackEnd;
+  }, [onTrackPlayStart, onTrackPause, onTrackResume, onTrackSeek, onTrackComplete, onTrackEnd]);
+
   // Load audio source when song changes or playback version changes
   useEffect(() => {
     if (!audioRef.current || !currentSong) return;
@@ -95,6 +128,7 @@ export default function MusicPlayer({
     setCurrentTime(0);
     setDuration(0);
     setIsBuffering(true);
+    hasStartedTrackingRef.current = false; // Reset tracking for new song
 
     // Set up one-time listener for when metadata is loaded
     const handleLoadedMetadata = () => {
@@ -162,12 +196,28 @@ export default function MusicPlayer({
     const handlePlaying = () => {
       console.log('Audio is playing');
       setIsBuffering(false);
+
+      // Track play start or resume
+      const positionMs = Math.floor(audio.currentTime * 1000);
+      if (!hasStartedTrackingRef.current) {
+        hasStartedTrackingRef.current = true;
+        onTrackPlayStartRef.current?.(positionMs);
+      } else if (wasPlayingRef.current === false) {
+        // Was paused, now resumed
+        onTrackResumeRef.current?.(positionMs);
+      }
+      wasPlayingRef.current = true;
     };
 
     const handleEnded = () => {
       console.log('Audio ended');
+      // Track song completion
+      const positionMs = Math.floor((audio.duration || 0) * 1000);
+      onTrackCompleteRef.current?.(positionMs);
+
       if (repeatModeRef.current === 'once') {
         console.log('Repeating song (once mode)');
+        hasStartedTrackingRef.current = false; // Will start new session on replay
         audio.currentTime = 0;
         const playPromise = audio.play();
         if (playPromise !== undefined) {
@@ -192,6 +242,12 @@ export default function MusicPlayer({
 
     const handlePause = () => {
       console.log('Audio paused');
+      // Track pause event
+      if (wasPlayingRef.current) {
+        const positionMs = Math.floor(audio.currentTime * 1000);
+        onTrackPauseRef.current?.(positionMs);
+        wasPlayingRef.current = false;
+      }
     };
 
     const handleSeeking = () => {
@@ -202,6 +258,9 @@ export default function MusicPlayer({
     const handleSeeked = () => {
       console.log('Audio seeked');
       setIsBuffering(false);
+      // Track seek event
+      const positionMs = Math.floor(audio.currentTime * 1000);
+      onTrackSeekRef.current?.(positionMs);
     };
 
     const handleError = (e: Event) => {

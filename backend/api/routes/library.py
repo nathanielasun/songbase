@@ -3123,3 +3123,89 @@ async def generate_preference_playlist(
         "songs": result.get("songs", []),
         "total": len(result.get("songs", [])),
     }
+
+
+class EnhancedForYouRequest(BaseModel):
+    """Request body for enhanced For You playlist generation."""
+
+    liked_song_ids: list[str]
+    disliked_song_ids: list[str] = []
+    limit: int = 50
+    metric: str | None = None
+    diversity: bool = True
+    dislike_weight: float = 0.5
+    use_play_history: bool = True
+    history_days: int = 30
+
+
+@router.post("/playlist/enhanced-for-you")
+async def generate_enhanced_for_you_playlist(
+    request: EnhancedForYouRequest,
+) -> dict[str, Any]:
+    """Generate an enhanced For You playlist using explicit preferences AND play history.
+
+    This endpoint combines:
+    1. Explicit likes (weight: 1.0)
+    2. Frequently played songs from history (weight: 0.8)
+    3. Recently completed songs (weight: 0.7)
+    4. Explicit dislikes (weight: -1.0)
+    5. Often skipped songs from history (weight: -0.5)
+
+    Args:
+        request: Enhanced For You request containing:
+            - liked_song_ids: List of SHA IDs of liked songs
+            - disliked_song_ids: List of SHA IDs of disliked songs
+            - limit: Number of songs to return (1-100)
+            - metric: Similarity metric (cosine, euclidean, dot)
+            - diversity: Whether to apply diversity constraints
+            - dislike_weight: Weight for dislike penalty (0-1)
+            - use_play_history: Whether to include play history signals
+            - history_days: Number of days to look back for history
+
+    Returns:
+        Enhanced playlist with songs ranked by combined preference score
+    """
+    from backend.processing.similarity_pipeline import pipeline as similarity_pipeline
+
+    # Validate inputs
+    if request.limit < 1 or request.limit > 100:
+        raise HTTPException(status_code=400, detail="Limit must be between 1 and 100")
+
+    if request.dislike_weight < 0 or request.dislike_weight > 1:
+        raise HTTPException(status_code=400, detail="Dislike weight must be between 0 and 1")
+
+    if request.history_days < 1 or request.history_days > 365:
+        raise HTTPException(status_code=400, detail="History days must be between 1 and 365")
+
+    try:
+        result = similarity_pipeline.generate_enhanced_for_you(
+            liked_sha_ids=request.liked_song_ids,
+            disliked_sha_ids=request.disliked_song_ids,
+            limit=request.limit,
+            metric=request.metric,
+            apply_diversity=request.diversity,
+            dislike_weight=request.dislike_weight,
+            use_play_history=request.use_play_history,
+            history_days=request.history_days,
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to generate enhanced playlist: {str(e)}")
+
+    return {
+        "playlist_type": "enhanced_for_you",
+        "config": {
+            "liked_count": len(request.liked_song_ids),
+            "disliked_count": len(request.disliked_song_ids),
+            "limit": request.limit,
+            "metric": request.metric,
+            "diversity": request.diversity,
+            "dislike_weight": request.dislike_weight,
+            "use_play_history": request.use_play_history,
+            "history_days": request.history_days,
+        },
+        "history_stats": result.get("history_stats", {}),
+        "positive_signals_count": result.get("positive_signals_count", 0),
+        "negative_signals_count": result.get("negative_signals_count", 0),
+        "songs": result.get("songs", []),
+        "total": len(result.get("songs", [])),
+    }

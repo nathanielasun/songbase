@@ -269,6 +269,24 @@ Navigate to **For You** in the sidebar to access your personalized radio station
 
 When the backend starts and database URLs are missing, it will automatically bootstrap the local Postgres cluster under `.metadata/`.
 
+## Listening Analytics
+
+Songbase automatically tracks your listening behavior to provide insights and power improved recommendations.
+
+**Features:**
+- **Automatic tracking**: All playback events (play, pause, seek, skip, complete) are tracked in the background
+- **Stats dashboard**: View your listening stats at `/stats` including total plays, time listened, and listening streaks
+- **Top charts**: See your most played songs and artists with visual bar charts
+- **Activity heatmap**: Visualize when you listen most (by day of week and hour)
+- **Play history**: Browse your recent listening activity with completion/skip indicators
+- **Period filtering**: Filter all stats by week, month, year, or all time
+
+**Data tracked:**
+- Play sessions with start/end times and completion percentage
+- Playback context (which playlist, album, or radio the song was played from)
+- Granular events (pause, resume, seek, skip)
+- Listening streaks (consecutive days with play activity)
+
 ## Local Python Runner
 
 Use the local Python wrapper to ensure commands resolve the project modules and run inside `.venv`:

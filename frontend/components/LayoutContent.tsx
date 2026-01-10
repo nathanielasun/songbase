@@ -24,6 +24,13 @@ function PlayerWrapper() {
     toggleRepeat,
     toggleShuffle,
     handleSongEnd,
+    // Playback tracking
+    trackPlayStart,
+    trackPause,
+    trackResume,
+    trackSeek,
+    trackSongComplete,
+    trackSongEnd,
   } = useMusicPlayer();
 
   const { likeSong, dislikeSong, isLiked, isDisliked } = useUserPreferences();
@@ -53,6 +60,12 @@ function PlayerWrapper() {
       onLike={likeSong}
       onDislike={dislikeSong}
       onSongEnd={handleSongEnd}
+      onTrackPlayStart={trackPlayStart}
+      onTrackPause={trackPause}
+      onTrackResume={trackResume}
+      onTrackSeek={trackSeek}
+      onTrackComplete={trackSongComplete}
+      onTrackEnd={trackSongEnd}
     />
   );
 }

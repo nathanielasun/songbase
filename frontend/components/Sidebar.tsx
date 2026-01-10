@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { Cog8ToothIcon, HomeIcon, MagnifyingGlassIcon, PlusCircleIcon, RectangleStackIcon, SparklesIcon } from '@heroicons/react/24/outline';
+import { ChartBarIcon, Cog8ToothIcon, HomeIcon, MagnifyingGlassIcon, PlusCircleIcon, RectangleStackIcon, SparklesIcon } from '@heroicons/react/24/outline';
 import { HeartIcon } from '@heroicons/react/24/solid';
 import { Playlist } from '@/lib/types';
 import { useUserPreferences } from '@/contexts/UserPreferencesContext';
@@ -48,6 +48,15 @@ export default function Sidebar({ playlists, onCreatePlaylist }: SidebarProps) {
             >
               <SparklesIcon className="w-6 h-6" />
               <span className="font-semibold">For You</span>
+            </Link>
+          </li>
+          <li>
+            <Link
+              href="/stats"
+              className="flex items-center gap-4 px-3 py-2 rounded-md hover:bg-gray-800 transition-colors"
+            >
+              <ChartBarIcon className="w-6 h-6" />
+              <span className="font-semibold">Your Stats</span>
             </Link>
           </li>
           <li>
