@@ -211,7 +211,10 @@ async def export_wrapped(
 
 @router.get("/share-card")
 async def get_share_card_data(
-    type: str = Query("overview", description="Card type: overview, top-song, top-artist, wrapped"),
+    type: str = Query(
+        "overview",
+        description="Card type: overview, top-song, top-artist, wrapped, monthly-summary, top-5-songs, listening-personality",
+    ),
     period: str = Query("month", description="Time period"),
     year: int | None = Query(None, description="Year for wrapped card"),
 ) -> dict[str, Any]:
@@ -295,5 +298,390 @@ async def get_share_card_data(
             "generated_at": datetime.now(timezone.utc).isoformat(),
         }
 
+    elif type == "monthly-summary":
+        overview = aggregator.get_overview(period)
+        top_songs = aggregator.get_top_songs(period, limit=3)
+        top_artists = aggregator.get_top_artists(period, limit=3)
+        genre_breakdown = aggregator.get_genre_breakdown(period)
+
+        # Calculate listening streak info
+        current_streak = overview.get("current_streak_days", 0)
+        longest_streak = overview.get("longest_streak_days", 0)
+
+        return {
+            "card_type": "monthly-summary",
+            "period": period,
+            "title": f"My {_format_period_name(period)} Summary",
+            "overview": {
+                "total_plays": overview["total_plays"],
+                "total_duration_formatted": overview["total_duration_formatted"],
+                "unique_songs": overview["unique_songs"],
+                "unique_artists": overview["unique_artists"],
+                "completion_rate": overview.get("avg_completion_rate", 0),
+            },
+            "top_songs": [
+                {"title": s["title"], "artist": s["artist"], "play_count": s["play_count"]}
+                for s in top_songs.get("songs", [])[:3]
+            ],
+            "top_artists": [
+                {"name": a["name"], "play_count": a["play_count"]}
+                for a in top_artists.get("artists", [])[:3]
+            ],
+            "top_genres": genre_breakdown.get("genres", [])[:3],
+            "streaks": {
+                "current": current_streak,
+                "longest": longest_streak,
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    elif type == "top-5-songs":
+        top_songs = aggregator.get_top_songs(period, limit=5)
+        if not top_songs.get("songs"):
+            raise HTTPException(status_code=404, detail="No songs found for this period")
+
+        return {
+            "card_type": "top-5-songs",
+            "period": period,
+            "title": f"My Top 5 Songs",
+            "songs": [
+                {
+                    "rank": i + 1,
+                    "title": s["title"],
+                    "artist": s["artist"],
+                    "play_count": s["play_count"],
+                    "sha_id": s.get("sha_id"),
+                }
+                for i, s in enumerate(top_songs.get("songs", [])[:5])
+            ],
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
+    elif type == "listening-personality":
+        overview = aggregator.get_overview(period)
+
+        # Get audio feature averages if available
+        try:
+            audio_stats = aggregator.get_audio_feature_stats()
+            avg_energy = audio_stats.get("energy", {}).get("average", 0.5)
+            avg_danceability = audio_stats.get("danceability", {}).get("average", 0.5)
+            avg_tempo = audio_stats.get("bpm", {}).get("average", 120)
+        except Exception:
+            avg_energy = 0.5
+            avg_danceability = 0.5
+            avg_tempo = 120
+
+        # Determine listening personality based on patterns
+        personality = _determine_listening_personality(overview, avg_energy, avg_danceability)
+
+        return {
+            "card_type": "listening-personality",
+            "period": period,
+            "title": "My Listening Personality",
+            "personality": personality["name"],
+            "description": personality["description"],
+            "traits": personality["traits"],
+            "audio_profile": {
+                "avg_energy": round(avg_energy * 100),
+                "avg_danceability": round(avg_danceability * 100),
+                "avg_tempo": round(avg_tempo),
+            },
+            "stats": {
+                "total_plays": overview["total_plays"],
+                "unique_artists": overview["unique_artists"],
+                "completion_rate": overview.get("avg_completion_rate", 0),
+            },
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+        }
+
     else:
         raise HTTPException(status_code=400, detail="Invalid card type")
+
+
+def _format_period_name(period: str) -> str:
+    """Format a period string into a human-readable name."""
+    if period == "week":
+        return "Weekly"
+    elif period == "month":
+        return "Monthly"
+    elif period == "year":
+        return "Yearly"
+    elif period == "all":
+        return "All-Time"
+    elif "-" in period:  # YYYY-MM format
+        try:
+            year, month = period.split("-")
+            month_names = [
+                "January", "February", "March", "April", "May", "June",
+                "July", "August", "September", "October", "November", "December"
+            ]
+            return f"{month_names[int(month) - 1]} {year}"
+        except (ValueError, IndexError):
+            return period.capitalize()
+    elif period.isdigit():  # Year
+        return period
+    return period.capitalize()
+
+
+def _determine_listening_personality(
+    overview: dict[str, Any],
+    avg_energy: float,
+    avg_danceability: float,
+) -> dict[str, Any]:
+    """Determine listening personality based on stats and audio features."""
+    total_plays = overview.get("total_plays", 0)
+    unique_artists = overview.get("unique_artists", 0)
+    completion_rate = overview.get("avg_completion_rate", 50)
+
+    # Calculate variety score (unique artists / plays ratio)
+    variety_score = (unique_artists / max(total_plays, 1)) * 100 if total_plays > 0 else 50
+
+    personalities = [
+        {
+            "name": "The Explorer",
+            "description": "You love discovering new music! Your library spans diverse artists and genres.",
+            "traits": ["Adventurous", "Open-minded", "Trend-setter"],
+            "condition": variety_score > 60,
+        },
+        {
+            "name": "The Devotee",
+            "description": "You know what you love! Deep connections with your favorite artists.",
+            "traits": ["Loyal", "Passionate", "Focused"],
+            "condition": variety_score < 25 and completion_rate > 70,
+        },
+        {
+            "name": "The Energizer",
+            "description": "High-energy tracks fuel your day! You love music that gets you moving.",
+            "traits": ["Energetic", "Active", "Upbeat"],
+            "condition": avg_energy > 0.7 and avg_danceability > 0.6,
+        },
+        {
+            "name": "The Chill Seeker",
+            "description": "Relaxation is key. You gravitate towards mellow, calming sounds.",
+            "traits": ["Relaxed", "Thoughtful", "Peaceful"],
+            "condition": avg_energy < 0.4,
+        },
+        {
+            "name": "The Completionist",
+            "description": "You listen to songs all the way through. Quality over quantity.",
+            "traits": ["Patient", "Thorough", "Appreciative"],
+            "condition": completion_rate > 85,
+        },
+        {
+            "name": "The Sampler",
+            "description": "So much music, so little time! You're always on the hunt for the next track.",
+            "traits": ["Curious", "Quick", "Diverse"],
+            "condition": completion_rate < 50 and total_plays > 100,
+        },
+        {
+            "name": "The Balanced Listener",
+            "description": "A perfect mix of old favorites and new discoveries.",
+            "traits": ["Balanced", "Versatile", "Adaptable"],
+            "condition": True,  # Default fallback
+        },
+    ]
+
+    for personality in personalities:
+        if personality["condition"]:
+            return {
+                "name": personality["name"],
+                "description": personality["description"],
+                "traits": personality["traits"],
+            }
+
+    # Should never reach here due to default, but just in case
+    return personalities[-1]
+
+
+@router.get("/report/{report_type}")
+async def export_report(
+    report_type: str,
+    format: str = Query("json", description="Export format: json, csv"),
+    period: str = Query("month", description="Time period"),
+) -> StreamingResponse:
+    """
+    Export comprehensive reports in various formats.
+
+    Args:
+        report_type: Type of report (overview, library, listening, audio, discoveries)
+        format: Export format (json or csv)
+        period: Time period
+
+    Returns:
+        Streaming response with report data
+    """
+    aggregator = get_stats_aggregator()
+    timestamp = datetime.now(timezone.utc).isoformat()
+
+    if report_type == "overview":
+        data = {
+            "report_type": "overview",
+            "period": period,
+            "generated_at": timestamp,
+            "overview": aggregator.get_overview(period),
+            "top_songs": aggregator.get_top_songs(period, limit=20),
+            "top_artists": aggregator.get_top_artists(period, limit=20),
+            "top_albums": aggregator.get_top_albums(period, limit=20),
+            "genre_breakdown": aggregator.get_genre_breakdown(period),
+        }
+
+    elif report_type == "library":
+        data = {
+            "report_type": "library",
+            "period": period,
+            "generated_at": timestamp,
+            "library_stats": aggregator.get_library_stats(),
+            "library_growth": aggregator.get_library_growth(period),
+            "library_composition": aggregator.get_library_composition(),
+        }
+
+    elif report_type == "listening":
+        data = {
+            "report_type": "listening",
+            "period": period,
+            "generated_at": timestamp,
+            "timeline": aggregator.get_listening_timeline(period),
+            "completion_trend": aggregator.get_completion_rate_trend(period),
+            "skip_analysis": aggregator.get_skip_analysis(period),
+            "context_distribution": aggregator.get_context_distribution(period),
+            "sessions": aggregator.get_listening_sessions(period, limit=50),
+        }
+
+    elif report_type == "audio":
+        data = {
+            "report_type": "audio",
+            "period": period,
+            "generated_at": timestamp,
+            "audio_features": aggregator.get_audio_feature_stats(),
+            "key_distribution": aggregator.get_key_distribution(),
+            "mood_breakdown": aggregator.get_mood_breakdown(),
+        }
+
+    elif report_type == "discoveries":
+        data = {
+            "report_type": "discoveries",
+            "period": period,
+            "generated_at": timestamp,
+            "summary": aggregator.get_discovery_summary(period),
+            "recently_added": aggregator.get_recently_added(period, limit=50),
+            "new_artists": aggregator.get_new_artists(period, limit=30),
+            "unplayed_songs": aggregator.get_unplayed_songs(limit=50),
+            "hidden_gems": aggregator.get_hidden_gems(limit=20),
+        }
+
+    elif report_type == "full":
+        # Comprehensive full report
+        data = {
+            "report_type": "full",
+            "period": period,
+            "generated_at": timestamp,
+            "overview": aggregator.get_overview(period),
+            "top_songs": aggregator.get_top_songs(period, limit=50),
+            "top_artists": aggregator.get_top_artists(period, limit=50),
+            "genre_breakdown": aggregator.get_genre_breakdown(period),
+            "library_stats": aggregator.get_library_stats(),
+            "audio_features": aggregator.get_audio_feature_stats(),
+        }
+
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid report type. Use: overview, library, listening, audio, discoveries, full",
+        )
+
+    if format.lower() == "json":
+        return StreamingResponse(
+            iter([json.dumps(data, indent=2)]),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename={report_type}_report_{period}.json"
+            },
+        )
+
+    elif format.lower() == "csv":
+        # Flatten the data for CSV export
+        output = io.StringIO()
+        writer = csv.writer(output)
+
+        # Write metadata header
+        writer.writerow(["Report Type", report_type])
+        writer.writerow(["Period", period])
+        writer.writerow(["Generated At", timestamp])
+        writer.writerow([])  # Empty row separator
+
+        # Write section-specific data
+        _write_report_csv_sections(writer, data, report_type)
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename={report_type}_report_{period}.csv"
+            },
+        )
+
+    else:
+        raise HTTPException(status_code=400, detail="Invalid format. Use 'json' or 'csv'")
+
+
+def _write_report_csv_sections(writer: csv.writer, data: dict[str, Any], report_type: str) -> None:
+    """Write report sections to CSV format."""
+    if report_type in ["overview", "full"]:
+        if "overview" in data:
+            writer.writerow(["=== Overview ==="])
+            overview = data["overview"]
+            writer.writerow(["Metric", "Value"])
+            for key, value in overview.items():
+                if not isinstance(value, (list, dict)):
+                    writer.writerow([key, value])
+            writer.writerow([])
+
+        if "top_songs" in data and data["top_songs"].get("songs"):
+            writer.writerow(["=== Top Songs ==="])
+            writer.writerow(["Rank", "Title", "Artist", "Play Count"])
+            for i, song in enumerate(data["top_songs"]["songs"], 1):
+                writer.writerow([i, song["title"], song["artist"], song["play_count"]])
+            writer.writerow([])
+
+        if "top_artists" in data and data["top_artists"].get("artists"):
+            writer.writerow(["=== Top Artists ==="])
+            writer.writerow(["Rank", "Name", "Play Count", "Unique Songs"])
+            for i, artist in enumerate(data["top_artists"]["artists"], 1):
+                writer.writerow([i, artist["name"], artist["play_count"], artist.get("unique_songs", 0)])
+            writer.writerow([])
+
+    if report_type in ["library", "full"]:
+        if "library_stats" in data:
+            writer.writerow(["=== Library Statistics ==="])
+            writer.writerow(["Metric", "Value"])
+            for key, value in data["library_stats"].items():
+                if not isinstance(value, (list, dict)):
+                    writer.writerow([key, value])
+            writer.writerow([])
+
+    if report_type == "listening":
+        if "sessions" in data and data["sessions"].get("sessions"):
+            writer.writerow(["=== Listening Sessions ==="])
+            writer.writerow(["Session Start", "Duration (min)", "Songs Played", "Completion Rate"])
+            for session in data["sessions"]["sessions"]:
+                writer.writerow([
+                    session.get("start_time", ""),
+                    session.get("duration_minutes", 0),
+                    session.get("songs_played", 0),
+                    session.get("completion_rate", 0),
+                ])
+            writer.writerow([])
+
+    if report_type == "discoveries":
+        if "recently_added" in data and data["recently_added"].get("songs"):
+            writer.writerow(["=== Recently Added Songs ==="])
+            writer.writerow(["Title", "Artist", "Album", "Added Date"])
+            for song in data["recently_added"]["songs"]:
+                writer.writerow([
+                    song.get("title", ""),
+                    song.get("artist", ""),
+                    song.get("album", ""),
+                    song.get("created_at", ""),
+                ])
+            writer.writerow([])

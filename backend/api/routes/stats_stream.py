@@ -35,12 +35,15 @@ async def notify_play_update(
     sha_id: str,
     event_type: str,
     session_id: str | None = None,
+    song_title: str | None = None,
+    song_artist: str | None = None,
+    song_album: str | None = None,
 ) -> None:
     """Notify connected clients about a play event."""
     aggregator = get_stats_aggregator()
     today_stats = aggregator.get_overview("week")
 
-    await broadcast_event({
+    event_data: dict[str, Any] = {
         "type": "play_update",
         "event_type": event_type,
         "sha_id": sha_id,
@@ -49,7 +52,17 @@ async def notify_play_update(
         "today_plays": today_stats.get("total_plays", 0),
         "today_duration_formatted": today_stats.get("total_duration_formatted", "0m"),
         "current_streak": today_stats.get("current_streak_days", 0),
-    })
+    }
+
+    # Include song details if provided
+    if song_title:
+        event_data["song"] = {
+            "title": song_title,
+            "artist": song_artist or "Unknown Artist",
+            "album": song_album,
+        }
+
+    await broadcast_event(event_data)
 
 
 async def _broadcast_worker() -> None:

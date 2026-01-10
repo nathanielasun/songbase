@@ -281,6 +281,7 @@ Songbase automatically tracks your listening behavior to provide insights and po
 - **Activity heatmap**: Visualize when you listen most (by day of week and hour)
 - **Play history**: Browse your recent listening activity with completion/skip indicators
 - **Period filtering**: Filter all stats by week, month, year, or all time
+- **Charts library**: Reusable Recharts-based components in `frontend/components/charts/` for building visualizations (bar, line, pie, area, radar, scatter charts with dark theme styling)
 
 **Data tracked:**
 - Play sessions with start/end times and completion percentage

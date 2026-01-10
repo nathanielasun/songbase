@@ -10,11 +10,26 @@ songbase/
 │   │   ├── page.tsx   # Home page
 │   │   ├── library/
 │   │   │   └── page.tsx # Library management UI
+│   │   ├── stats/
+│   │   │   └── page.tsx # Statistics dashboard
 │   │   └── settings/
 │   │       └── page.tsx # Pipeline + storage settings UI
+│   ├── components/
+│   │   ├── charts/    # Recharts-based visualization library
+│   │   │   ├── colors.ts       # Color palette and theming
+│   │   │   ├── ChartContainer.tsx # Wrapper with loading/empty states
+│   │   │   ├── BarChart.tsx    # Bar chart variants
+│   │   │   ├── LineChart.tsx   # Line chart with comparisons
+│   │   │   ├── PieChart.tsx    # Pie/donut/gauge charts
+│   │   │   ├── AreaChart.tsx   # Area charts and sparklines
+│   │   │   ├── RadarChart.tsx  # Radar charts for audio features
+│   │   │   ├── ScatterChart.tsx # Scatter plots
+│   │   │   └── index.ts        # Barrel exports
+│   │   ├── stats/     # Statistics components
+│   │   └── features/  # Audio feature display components
 │   ├── public/        # Static assets
 │   ├── next.config.ts # Next.js configuration (API proxy)
-│   ├── package.json   # Frontend dependencies
+│   ├── package.json   # Frontend dependencies (includes recharts)
 │   └── tsconfig.json  # TypeScript configuration
 ├── backend/
 │   ├── api/           # FastAPI REST API
@@ -219,15 +234,31 @@ songbase/
 
 ### frontend/app/stats/page.tsx
 - **Purpose**: Listening statistics and analytics dashboard
-- **Uses**: `/api/stats/overview`, `/api/stats/top-songs`, `/api/stats/top-artists`, `/api/stats/heatmap`, `/api/stats/history`
+- **Uses**: `/api/stats/overview`, `/api/stats/top-songs`, `/api/stats/top-artists`, `/api/stats/heatmap`, `/api/stats/history`, `/api/stats/library`, `/api/stats/library/growth`, `/api/stats/library/composition`, `/api/stats/audio-features`, `/api/stats/audio-features/correlation`, `/api/stats/keys`, `/api/stats/moods`, `/api/library/genres`, `/api/library/artists/popular`, `/api/smart-playlists`
+- **Tabs**:
+  - **Overview**: Period-based listening statistics, top songs/artists, heatmap, history
+  - **Library**: Library size, growth trends, composition breakdown
+  - **Audio**: Audio feature analysis with radar charts, distributions, and visualizations
 - **Features**:
-  - Period selector (Week/Month/Year/All Time)
+  - **FilterBar component** with advanced filtering:
+    - Time range presets (Today, This Week, This Month, This Year, All Time)
+    - Custom date range picker with native date inputs
+    - Comparison mode for period A vs period B analysis
+    - Filter chips for genres, artists, and playlists
+    - Audio feature range filters (energy, danceability, BPM)
+    - URL state persistence (filters saved in query params)
   - Overview cards (total plays, time listened, unique songs, listening streak)
   - Top songs chart with play counts and inline play buttons
   - Top artists chart with links to artist pages
   - Listening heatmap showing activity by day of week and hour
   - Recent play history with completion/skip status
-- **Notes**: All playback is automatically tracked via MusicPlayerContext integration
+  - Audio feature radar chart (energy, danceability, acousticness, instrumentalness, speechiness)
+  - BPM distribution histogram with min/max/avg statistics
+  - Energy vs Danceability scatter plot with correlation analysis
+  - Key distribution donut chart with major/minor breakdown
+  - Mood breakdown chart with primary moods
+  - Feature distributions as small multiples
+- **Notes**: All playback is automatically tracked via MusicPlayerContext integration. Filters are persisted in URL query parameters for shareable links.
 
 ### frontend/app/playlist/liked/page.tsx
 - **Purpose**: Dedicated playlist page for all liked songs
@@ -382,6 +413,244 @@ songbase/
   - `top-song`: Featured song with play count
   - `top-artist`: Featured artist with play count and song count
   - `wrapped`: Year-in-review with top song, artist, and personality
+
+### frontend/components/charts/
+**Purpose**: Reusable chart component library built on Recharts with consistent dark theme styling for the statistics dashboard.
+
+**Components**:
+- `colors.ts` - Color palette constants and helper functions
+- `ChartContainer.tsx` - Wrapper component with loading/empty states
+- `ChartTooltip.tsx` - Custom tooltip components
+- `ChartLegend.tsx` - Custom legend components
+- `BarChart.tsx` - Bar chart (horizontal/vertical) with variants
+- `LineChart.tsx` - Line chart with comparison support
+- `PieChart.tsx` - Pie/donut/gauge charts
+- `AreaChart.tsx` - Area charts with stacking and sparklines
+- `RadarChart.tsx` - Radar/spider charts for audio features
+- `ScatterChart.tsx` - Scatter plots for BPM vs Energy analysis
+- `index.ts` - Barrel exports for all components
+
+**Color Palette** (from `colors.ts`):
+```typescript
+import { CHART_COLORS, getSeriesColor, KEY_COLORS, MOOD_COLORS } from '@/components/charts';
+
+// Brand colors
+CHART_COLORS.primary    // #ec4899 (Pink)
+CHART_COLORS.secondary  // #8b5cf6 (Purple)
+CHART_COLORS.tertiary   // #06b6d4 (Cyan)
+
+// Get series color by index (cycles through palette)
+getSeriesColor(0)  // Returns first color in series
+```
+
+**Usage Examples**:
+```tsx
+import {
+  BarChart,
+  SimpleLineChart,
+  DonutChart,
+  AudioFeaturesRadar,
+  BpmEnergyScatter,
+  Sparkline,
+} from '@/components/charts';
+
+// Simple bar chart
+<BarChart
+  data={[{ name: 'Rock', value: 100 }, { name: 'Pop', value: 80 }]}
+  dataKeys={['value']}
+  title="Songs by Genre"
+  height={300}
+/>
+
+// Line chart with comparison
+<ComparisonLineChart
+  data={weeklyData}
+  title="Weekly Listening"
+  currentLabel="This Week"
+  previousLabel="Last Week"
+/>
+
+// Donut chart
+<DonutChart
+  data={genreData}
+  title="Genre Distribution"
+  showPercentage
+/>
+
+// Audio features radar (specialized for audio analysis)
+<AudioFeaturesRadar
+  features={{ energy: 0.8, danceability: 0.6, acousticness: 0.2 }}
+  title="Audio Profile"
+/>
+
+// BPM vs Energy scatter plot
+<BpmEnergyScatter
+  data={songData}
+  colorByMood
+  sizeByPlayCount
+/>
+
+// Inline sparkline
+<Sparkline data={[10, 20, 15, 30, 25]} color="#ec4899" width={100} height={30} />
+```
+
+**Specialized Charts**:
+- `AudioFeaturesRadar` - Pre-configured for energy, danceability, acousticness, etc.
+- `BpmEnergyScatter` - Scatter plot with BPM on X-axis, energy on Y-axis
+- `DanceabilityEnergyScatter` - Danceability vs Energy analysis
+- `Sparkline` - Minimal inline charts for overview cards
+- `GaugeChart` - Half-donut for percentage displays
+
+**Accessibility Features** (`accessibility.ts`):
+```typescript
+import {
+  COLOR_BLIND_SAFE,
+  generateDataSummary,
+  announceToScreenReader,
+  getAccessibleColor,
+  KEYBOARD_KEYS,
+} from '@/components/charts';
+
+// Color-blind safe palette (deuteranopia, protanopia, tritanopia)
+COLOR_BLIND_SAFE.series   // 8-color accessible palette
+COLOR_BLIND_SAFE.status   // success, warning, error, info
+
+// Generate screen reader summary for chart data
+const summary = generateDataSummary(data, 'plays');
+// "Contains 10 items. Total plays: 1,234. Highest: Rock with 300. Lowest: Jazz with 50."
+
+// Announce updates to screen readers
+announceToScreenReader('Chart updated with new data');
+
+// Get accessible color with minimum contrast ratio
+getAccessibleColor('#ec4899', '#111827');  // Returns color if contrast >= 4.5:1
+```
+
+### frontend/components/stats/EmptyState.tsx
+- **Purpose**: Accessible empty state components with helpful suggestions
+- **Components**:
+  - `EmptyState`: Full empty state with icon, title, suggestions, and actions
+  - `InlineEmptyState`: Compact inline empty state for lists
+  - `Skeleton`: Loading placeholder (text, circular, rectangular, chart variants)
+  - `StatCardSkeleton`: Pre-styled skeleton for stat cards
+  - `ListSkeleton`: Pre-styled skeleton for list items
+- **Preset Types**: `no-data`, `no-plays`, `no-songs`, `no-results`, `loading-failed`, `coming-soon`, `no-activity`, `no-favorites`, `no-playlists`
+- **Usage**:
+  ```tsx
+  import { EmptyState, Skeleton, StatCardSkeleton } from '@/components/stats';
+
+  // Use preset empty state
+  <EmptyState type="no-plays" />
+
+  // Custom empty state with suggestions
+  <EmptyState
+    title="No Data Available"
+    description="Select a different time range"
+    suggestions={[
+      { text: 'Try last month', action: { label: 'Last Month', onClick: () => {} } }
+    ]}
+    action={{ label: 'Browse Library', href: '/library' }}
+  />
+
+  // Loading skeletons
+  <Skeleton variant="text" lines={3} />
+  <StatCardSkeleton />
+  <ListSkeleton items={5} showImage />
+  ```
+
+### frontend/components/stats/Transitions.tsx
+- **Purpose**: Animation components with reduced motion support
+- **Motion Preference**: Automatically respects `prefers-reduced-motion` media query
+- **Components**:
+  - `FadeIn`: Simple opacity animation
+  - `SlideIn`: Slide from direction (up, down, left, right)
+  - `ScaleIn`: Scale up animation
+  - `Stagger`: Stagger animations for list items
+  - `Collapse`: Height animation for expandable content
+  - `TabTransition`: Smooth tab switching animation
+  - `AnimatedPresence`: Mount/unmount with animation
+  - `NumberTransition`: Animated number counter
+  - `Pulse`: Pulsing glow effect
+  - `AnimateOnView`: Animate when element enters viewport
+- **Hooks**:
+  - `useReducedMotion()`: Check if user prefers reduced motion
+  - `useInView(ref)`: Detect when element is in viewport
+- **Usage**:
+  ```tsx
+  import {
+    FadeIn,
+    SlideIn,
+    Stagger,
+    NumberTransition,
+    useReducedMotion,
+    AnimateOnView,
+  } from '@/components/stats';
+
+  // Fade in with delay
+  <FadeIn delay={200}>Content</FadeIn>
+
+  // Slide in from bottom
+  <SlideIn direction="up" duration={300}>Content</SlideIn>
+
+  // Staggered list animation
+  <Stagger staggerDelay={50} animation="slide">
+    {items.map(item => <ListItem key={item.id} />)}
+  </Stagger>
+
+  // Animated number
+  <NumberTransition value={1234} formatValue={(v) => `${v} plays`} />
+
+  // Animate when scrolled into view
+  <AnimateOnView animation="fade" threshold={0.1}>
+    <ChartComponent />
+  </AnimateOnView>
+
+  // Check reduced motion preference
+  const prefersReducedMotion = useReducedMotion();
+  ```
+
+### frontend/components/stats/AccessibleTabs.tsx
+- **Purpose**: WCAG-compliant tab navigation with full keyboard support
+- **Components**:
+  - `Tabs`, `TabList`, `Tab`, `TabPanel`: Composable tab system
+  - `StatsTabs`: Pre-styled tabs for stats dashboard
+  - `GridNavigation`: Arrow key navigation for data grids
+  - `SkipLink`: Skip to content link for keyboard users
+  - `LiveRegion`: ARIA live region for announcements
+- **Keyboard Navigation**:
+  - Arrow Left/Right: Navigate between tabs
+  - Home/End: Jump to first/last tab
+  - Enter/Space: Select focused item
+- **Usage**:
+  ```tsx
+  import { Tabs, TabList, Tab, TabPanel, StatsTabs, SkipLink } from '@/components/stats';
+
+  // Composable tabs
+  <Tabs defaultTab="overview" onTabChange={(id) => console.log(id)}>
+    <TabList label="Statistics sections">
+      <Tab id="overview">Overview</Tab>
+      <Tab id="library">Library</Tab>
+      <Tab id="listening">Listening</Tab>
+    </TabList>
+    <TabPanel id="overview">Overview content</TabPanel>
+    <TabPanel id="library" lazy>Library content (lazy loaded)</TabPanel>
+    <TabPanel id="listening">Listening content</TabPanel>
+  </Tabs>
+
+  // Pre-styled stats tabs
+  <StatsTabs
+    tabs={[
+      { id: 'overview', label: 'Overview', icon: <ChartIcon /> },
+      { id: 'library', label: 'Library' },
+    ]}
+    activeTab={activeTab}
+    onTabChange={setActiveTab}
+  />
+
+  // Skip link for keyboard users
+  <SkipLink targetId="main-content" />
+  <main id="main-content">...</main>
+  ```
 
 ### frontend/contexts/UserPreferencesContext.tsx
 - **Purpose**: Client-side storage of user preferences (likes/dislikes)
@@ -654,6 +923,27 @@ try {
   - `GET /api/stats/genres`: Genre breakdown with play counts and percentages
   - `GET /api/stats/trends`: Compare current period to previous period (percentage changes)
   - `GET /api/stats/wrapped/{year}`: Year-in-review summary (similar to Spotify Wrapped)
+  - `GET /api/stats/library`: Comprehensive library statistics (total songs, albums, artists, duration, storage, songs by decade/year)
+  - `GET /api/stats/library/growth`: Library growth over time (songs added per period with cumulative totals)
+  - `GET /api/stats/library/composition`: Library breakdown by source, verification status, and audio feature availability
+  - `GET /api/stats/audio-features`: Audio feature distributions (BPM, energy, danceability, acousticness, instrumentalness, speechiness) with min/max/avg/median and histogram buckets
+  - `GET /api/stats/audio-features/correlation`: Correlation matrix between audio features with sample scatter plot data
+  - `GET /api/stats/keys`: Musical key distribution with mode (major/minor) and Camelot notation
+  - `GET /api/stats/moods`: Primary and secondary mood breakdown with associated audio feature averages
+  - `GET /api/stats/listening/timeline`: Listening activity timeline with comparison to previous period
+  - `GET /api/stats/listening/completion-trend`: Daily completion and skip rate trends over time
+  - `GET /api/stats/listening/skip-analysis`: Most skipped songs, skip rate by genre and hour
+  - `GET /api/stats/listening/context`: Play context distribution (radio, playlist, album, etc.) with trends
+  - `GET /api/stats/listening/sessions`: Listening session analysis with length distribution
+  - `GET /api/stats/heatmap/enhanced`: Enhanced heatmap with top song per time slot
+  - `GET /api/stats/daily-activity`: Daily plays and songs added for sparkline charts
+  - `GET /api/stats/discoveries/summary`: Discovery metrics summary (songs added, new artists/genres, first listens)
+  - `GET /api/stats/discoveries/recently-added`: Recently added songs grouped by date
+  - `GET /api/stats/discoveries/new-artists`: Artists discovered (first played) in period with first song
+  - `GET /api/stats/discoveries/genre-exploration`: Genre listening evolution with new genre discoveries
+  - `GET /api/stats/discoveries/unplayed`: Songs never played with library percentage
+  - `GET /api/stats/discoveries/one-hit-wonders`: Songs played exactly once
+  - `GET /api/stats/discoveries/hidden-gems`: Low play count but high completion rate songs
   - `POST /api/stats/refresh-daily`: Refresh the daily listening stats materialized view
 - **Period Formats**: Endpoints accepting `period` parameter support:
   - `week`, `month`, `year`, `all` - Relative periods
@@ -685,6 +975,69 @@ try {
   # Get 2024 Wrapped summary
   curl "http://localhost:8000/api/stats/wrapped/2024"
 
+  # Get comprehensive library statistics
+  curl "http://localhost:8000/api/stats/library"
+
+  # Get library growth by month
+  curl "http://localhost:8000/api/stats/library/growth?period=month"
+
+  # Get library composition breakdown
+  curl "http://localhost:8000/api/stats/library/composition"
+
+  # Get audio feature distributions (BPM, energy, danceability, etc.)
+  curl "http://localhost:8000/api/stats/audio-features"
+
+  # Get audio feature correlations for scatter plots
+  curl "http://localhost:8000/api/stats/audio-features/correlation"
+
+  # Get musical key distribution
+  curl "http://localhost:8000/api/stats/keys"
+
+  # Get mood breakdown with feature averages
+  curl "http://localhost:8000/api/stats/moods"
+
+  # Get listening timeline with comparison data
+  curl "http://localhost:8000/api/stats/listening/timeline?period=month&granularity=day"
+
+  # Get completion and skip rate trends
+  curl "http://localhost:8000/api/stats/listening/completion-trend?period=month"
+
+  # Get skip analysis (most skipped songs, by genre/hour)
+  curl "http://localhost:8000/api/stats/listening/skip-analysis?period=month&limit=20"
+
+  # Get play context distribution
+  curl "http://localhost:8000/api/stats/listening/context?period=month"
+
+  # Get listening session analysis
+  curl "http://localhost:8000/api/stats/listening/sessions?period=month"
+
+  # Get enhanced heatmap with top songs per slot
+  curl "http://localhost:8000/api/stats/heatmap/enhanced"
+
+  # Get daily activity for sparklines (7 days)
+  curl "http://localhost:8000/api/stats/daily-activity?days=7"
+
+  # Get discovery summary for the month
+  curl "http://localhost:8000/api/stats/discoveries/summary?period=month"
+
+  # Get recently added songs (last 30 days)
+  curl "http://localhost:8000/api/stats/discoveries/recently-added?days=30&limit=50"
+
+  # Get new artists discovered this month
+  curl "http://localhost:8000/api/stats/discoveries/new-artists?period=month"
+
+  # Get genre exploration data
+  curl "http://localhost:8000/api/stats/discoveries/genre-exploration?period=year"
+
+  # Get unplayed songs
+  curl "http://localhost:8000/api/stats/discoveries/unplayed?limit=50"
+
+  # Get one-hit wonders (songs played once)
+  curl "http://localhost:8000/api/stats/discoveries/one-hit-wonders?period=all&limit=30"
+
+  # Get hidden gems (high completion, low plays)
+  curl "http://localhost:8000/api/stats/discoveries/hidden-gems?limit=20"
+
   # Refresh daily stats materialized view
   curl -X POST http://localhost:8000/api/stats/refresh-daily
   ```
@@ -693,35 +1046,65 @@ try {
 - **Purpose**: Real-time WebSocket endpoint for live listening statistics
 - **Endpoints**:
   - `WebSocket /api/stats/stream/live`: WebSocket connection for real-time stats updates
+  - `GET /api/stats/stream/clients`: Get count of connected WebSocket clients
 - **Message Types** (from server):
-  - `stats_update`: Current listening statistics (sent on connect and periodically)
-  - `play_started`: A song started playing (includes song details)
-  - `play_completed`: A song finished playing
-  - `play_skipped`: A song was skipped
+  - `initial`: Full stats payload sent on connection
+  - `periodic`: Abbreviated stats sent every 30 seconds
+  - `refresh`: Full stats in response to client refresh request
+  - `play_update`: Play event (started, completed, skipped) with song details and updated stats
+  - `pong`: Response to client ping
+- **Message Types** (from client):
+  - `ping`: Keep-alive ping
+  - `refresh`: Request full stats refresh
+- **Play Update Payload**:
+  ```json
+  {
+    "type": "play_update",
+    "event_type": "started|completed|skipped",
+    "sha_id": "abc123",
+    "session_id": "session-uuid",
+    "timestamp": "2024-01-15T10:30:00Z",
+    "today_plays": 42,
+    "today_duration_formatted": "2h 15m",
+    "current_streak": 5,
+    "song": {
+      "title": "Song Title",
+      "artist": "Artist Name",
+      "album": "Album Name"
+    }
+  }
+  ```
 - **Features**:
   - Broadcasts play events to all connected clients
   - Automatic stats refresh every 30 seconds
   - Connection management with proper cleanup
-- **Usage**:
-  ```javascript
-  // Frontend WebSocket connection
-  const ws = new WebSocket('ws://localhost:8000/api/stats/stream/live');
+  - Exponential backoff reconnection on client side
+- **Frontend Hook** (`frontend/hooks/useStatsStream.ts`):
+  ```typescript
+  import { useStatsStream } from '@/hooks/useStatsStream';
 
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    switch (data.type) {
-      case 'stats_update':
-        console.log('Stats:', data.stats);
-        break;
-      case 'play_started':
-        console.log('Now playing:', data.song);
-        break;
-      case 'play_completed':
-        console.log('Finished:', data.session_id);
-        break;
-    }
-  };
+  function MyComponent() {
+    const { connected, stats, activity, refresh, error } = useStatsStream({
+      enabled: true,
+      maxActivityItems: 20,
+      onPlayUpdate: (event) => console.log('Play event:', event),
+    });
+
+    return (
+      <div>
+        <p>Connected: {connected ? 'Yes' : 'No'}</p>
+        <p>Total plays: {stats.total_plays}</p>
+        <p>Recent activity: {activity.length} items</p>
+      </div>
+    );
+  }
   ```
+- **Real-time Components**:
+  - `AnimatedCounter`: Smoothly animates between number values with easing
+  - `AnimatedDuration`: Animated counter for duration strings
+  - `LiveIndicator`: Shows connection status with pulsing dot
+  - `LiveActivityFeed`: Real-time feed of listening activity with animated entries
+  - `StatCardWithAnimation`: Stat card that animates value changes
 
 ### backend/api/routes/export.py
 - **Purpose**: Export listening history and statistics in various formats
@@ -730,16 +1113,34 @@ try {
   - `GET /api/export/stats`: Export statistics summary as JSON
   - `GET /api/export/wrapped/{year}`: Export year-in-review data as JSON
   - `GET /api/export/share-card`: Generate shareable listening stats card data
+  - `GET /api/export/report/{report_type}`: Export comprehensive reports (overview, library, listening, audio, discoveries, full)
 - **Query Parameters** (for history):
   - `format`: `json` (default) or `csv`
   - `period`: `week`, `month`, `year`, `all`, or specific date (`YYYY`, `YYYY-MM`)
-  - `limit`: Maximum records to export (default: 1000)
-  - `offset`: Pagination offset
+  - `limit`: Maximum records to export (default: 10000)
+- **Report Types** (for `/api/export/report/{type}`):
+  - `overview`: Overview stats with top songs, artists, albums, genres
+  - `library`: Library statistics, growth, and composition
+  - `listening`: Timeline, completion trends, skip analysis, context distribution, sessions
+  - `audio`: Audio features, key distribution, mood breakdown
+  - `discoveries`: Summary, recently added, new artists, unplayed songs, hidden gems
+  - `full`: Comprehensive report combining all statistics
 - **Share Card Types**:
-  - `overview`: General listening stats
+  - `overview`: General listening stats (4 key metrics)
   - `top-song`: Top song for the period
   - `top-artist`: Top artist for the period
   - `wrapped`: Year-in-review summary
+  - `monthly-summary`: Comprehensive period summary with top songs, artists, genres, and streaks
+  - `top-5-songs`: Top 5 songs ranked with play counts
+  - `listening-personality`: Listening personality type with traits and audio profile
+- **Listening Personality Types** (computed based on listening patterns):
+  - "The Explorer": High variety in artists/genres
+  - "The Devotee": Deep loyalty to favorites
+  - "The Energizer": Preference for high-energy tracks
+  - "The Chill Seeker": Preference for mellow sounds
+  - "The Completionist": High completion rate
+  - "The Sampler": Low completion, high discovery
+  - "The Balanced Listener": Mix of favorites and discoveries
 - **Usage**:
   ```bash
   # Export play history as JSON
@@ -756,6 +1157,84 @@ try {
 
   # Generate share card data
   curl "http://localhost:8000/api/export/share-card?type=top-song&period=month"
+
+  # Generate monthly summary card
+  curl "http://localhost:8000/api/export/share-card?type=monthly-summary&period=month"
+
+  # Generate listening personality card
+  curl "http://localhost:8000/api/export/share-card?type=listening-personality&period=year"
+
+  # Export full report as JSON
+  curl "http://localhost:8000/api/export/report/full?period=month"
+
+  # Export listening report as CSV
+  curl "http://localhost:8000/api/export/report/listening?format=csv&period=week"
+  ```
+
+### frontend/components/stats/ExportButton.tsx
+- **Purpose**: Export stats data in various formats (JSON, CSV, PNG, PDF)
+- **Components**:
+  - `ExportButton`: Dropdown button with multiple export format options
+  - `QuickExportButton`: Single-format export button
+  - `ExportHistoryButton`: Specialized button for exporting play history
+- **Supported Formats**:
+  - JSON: Structured data download
+  - CSV: Spreadsheet-compatible format
+  - PNG: Screenshot of current view (using html2canvas)
+  - PDF: Print-ready document (opens browser print dialog)
+- **Props**:
+  - `reportType`: Type of report (overview, library, listening, audio, discoveries, full)
+  - `period`: Time period for the export
+  - `captureRef`: Reference to element for PNG capture
+  - `formats`: Array of available formats (default: all)
+  - `variant`: Button style ('default', 'compact', 'icon-only')
+- **Usage**:
+  ```tsx
+  import { ExportButton, QuickExportButton, ExportHistoryButton } from '@/components/stats';
+
+  // Full dropdown export button
+  <ExportButton reportType="overview" period="month" />
+
+  // Compact dropdown
+  <ExportButton reportType="listening" period="week" variant="compact" />
+
+  // Quick single-format export
+  <QuickExportButton format="csv" reportType="overview" period="month" />
+
+  // Export history button
+  <ExportHistoryButton format="csv" period="all" />
+  ```
+
+### frontend/components/stats/ShareCard.tsx (Enhanced)
+- **Purpose**: Render and share listening statistics cards
+- **Components**:
+  - `ShareCard`: Modal component displaying a shareable stats card
+  - `ShareCardButton`: Button that fetches and displays a share card
+  - `fetchShareCardData`: Utility function to fetch card data from API
+- **Supported Card Types**:
+  - `overview`: 4 key metrics in a grid
+  - `top-song`: Featured song with play count
+  - `top-artist`: Featured artist with stats
+  - `wrapped`: Year-in-review summary
+  - `monthly-summary`: Comprehensive summary with top songs, artists, and streaks
+  - `top-5-songs`: Ranked list of top 5 songs with medal styling
+  - `listening-personality`: Personality type with traits and audio profile
+- **Features**:
+  - Copy as text (clipboard)
+  - Save as image (PNG via html2canvas)
+  - Gradient backgrounds and styled cards
+- **Usage**:
+  ```tsx
+  import { ShareCard, ShareCardButton, fetchShareCardData } from '@/components/stats';
+
+  // Use ShareCardButton for automatic fetching
+  <ShareCardButton type="monthly-summary" period="month" />
+  <ShareCardButton type="listening-personality" period="year" />
+  <ShareCardButton type="top-5-songs" period="week" />
+
+  // Manual fetch and display
+  const data = await fetchShareCardData('monthly-summary', 'month');
+  <ShareCard data={data} onClose={() => {}} />
   ```
 
 ### backend/api/routes/smart_playlists.py

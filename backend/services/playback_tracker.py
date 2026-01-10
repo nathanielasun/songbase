@@ -13,6 +13,7 @@ from typing import Any
 from uuid import UUID
 
 from backend.db.connection import get_connection
+from backend.services.stats_cache import invalidate_stats_on_play
 
 logger = logging.getLogger(__name__)
 
@@ -383,6 +384,9 @@ class PlaybackTracker:
                         sha_id=row[0],
                         payload={"event": event_type, "session_id": session_id},
                     )
+
+        # Invalidate stats cache to reflect new play data
+        invalidate_stats_on_play()
 
         return {
             "success": True,
