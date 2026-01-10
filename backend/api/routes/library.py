@@ -85,6 +85,8 @@ class PipelineRunRequest(BaseModel):
     image_rate_limit: float | None = None
     sources_file: str | None = None
     run_until_empty: bool = False
+    features: bool | None = None
+    features_limit: int | None = None
 
 
 class LinkSongsRequest(BaseModel):
@@ -2628,6 +2630,12 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
             if payload.sources_file
             else None,
             run_until_empty=payload.run_until_empty,
+            features=payload.features
+            if payload.features is not None
+            else bool(defaults.get("features", False)),
+            features_limit=payload.features_limit
+            if payload.features_limit is not None
+            else defaults.get("features_limit"),
         )
         pipeline_paths = _resolve_pipeline_paths()
         try:

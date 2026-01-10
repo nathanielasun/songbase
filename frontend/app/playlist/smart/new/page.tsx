@@ -55,8 +55,14 @@ export default function NewSmartPlaylistPage() {
     });
 
     if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(errorData.detail || 'Failed to create playlist');
+      let errorMessage = 'Failed to create playlist';
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.detail || errorMessage;
+      } catch {
+        errorMessage = `Server error (${response.status})`;
+      }
+      throw new Error(errorMessage);
     }
 
     const result = await response.json();

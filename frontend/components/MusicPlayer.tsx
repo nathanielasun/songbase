@@ -373,11 +373,17 @@ export default function MusicPlayer({
       {/* Song Info with Like/Dislike */}
       <div className="flex items-center gap-4 w-1/4">
         <img
-          src={currentSong.albumArt}
+          src={currentSong.albumArt || '/default-album.svg'}
           alt=""
           width={56}
           height={56}
           className="rounded object-cover bg-gray-800"
+          onError={(e) => {
+            const target = e.target as HTMLImageElement;
+            if (target.src !== '/default-album.svg') {
+              target.src = '/default-album.svg';
+            }
+          }}
         />
         <div className="flex-1 min-w-0">
           {currentSong.albumId ? (

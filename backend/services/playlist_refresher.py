@@ -379,7 +379,7 @@ class PlaylistRefresher:
         if sort_order not in ("ASC", "DESC"):
             sort_order = "DESC"
 
-        # Map sort_by to column
+        # Map sort_by to column (must match SELECT aliases for DISTINCT compatibility)
         sort_column = {
             "title": "s.title",
             "artist": "artist",
@@ -387,14 +387,14 @@ class PlaylistRefresher:
             "release_year": "COALESCE(s.release_year, 0)",
             "duration_sec": "COALESCE(s.duration_sec, 0)",
             "added_at": "s.created_at",
-            "play_count": "COALESCE(play_count, 0)",
+            "play_count": "play_count",
             "last_played": "last_played",
-            "skip_count": "COALESCE(skip_count, 0)",
-            "completion_rate": "COALESCE(avg_completion, 0)",
-            "last_week_plays": "COALESCE(last_week_plays, 0)",
-            "bpm": "COALESCE(af.bpm, 0)",
-            "energy": "COALESCE(af.energy, 0)",
-            "danceability": "COALESCE(af.danceability, 0)",
+            "skip_count": "skip_count",
+            "completion_rate": "avg_completion",
+            "last_week_plays": "last_week_plays",
+            "bpm": "bpm",
+            "energy": "energy",
+            "danceability": "danceability",
             "random": "RANDOM()",
         }.get(sort_by, "s.created_at")
 
@@ -440,6 +440,7 @@ class PlaylistRefresher:
                 s.album,
                 s.duration_sec,
                 s.release_year,
+                s.created_at,
                 (
                     SELECT STRING_AGG(DISTINCT a.name, ', ')
                     FROM metadata.song_artists sa
@@ -452,7 +453,10 @@ class PlaylistRefresher:
                 COALESCE(ps.avg_completion, 0) as avg_completion,
                 COALESCE(ps.last_week_plays, 0) as last_week_plays,
                 COALESCE(ps.trending, FALSE) as trending,
-                COALESCE(ps.declining, FALSE) as declining
+                COALESCE(ps.declining, FALSE) as declining,
+                COALESCE(af.bpm, 0) as bpm,
+                COALESCE(af.energy, 0) as energy,
+                COALESCE(af.danceability, 0) as danceability
             FROM metadata.songs s
             LEFT JOIN trend_stats ps ON ps.sha_id = s.sha_id
             LEFT JOIN metadata.audio_features af ON af.sha_id = s.sha_id

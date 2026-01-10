@@ -239,7 +239,20 @@ class RuleEngine:
             "column": "danceability",
             "optional": True,
         },
+        "acousticness": {
+            "type": "number",
+            "table": "af",
+            "column": "acousticness",
+            "optional": True,
+        },
+        "instrumentalness": {
+            "type": "number",
+            "table": "af",
+            "column": "instrumentalness",
+            "optional": True,
+        },
         "mood": {"type": "string", "table": "af", "column": "mood_primary", "optional": True},
+        "key_camelot": {"type": "string", "table": "af", "column": "key_camelot", "optional": True},
     }
 
     def parse(self, rules_json: dict) -> ConditionGroup:

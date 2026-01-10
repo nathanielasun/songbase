@@ -7,6 +7,55 @@ set -euo pipefail
 echo "Starting Songbase development servers..."
 
 ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Create .env file with template if it doesn't exist
+if [ ! -f "${ROOT_DIR}/.env" ]; then
+  echo "Creating .env file with default template..."
+  cat > "${ROOT_DIR}/.env" << 'ENVEOF'
+# Songbase Environment Configuration
+# Fill in your API credentials below to enable additional metadata sources
+
+# =============================================================================
+# Discogs API (https://www.discogs.com/settings/developers)
+# =============================================================================
+# Option 1: Personal Access Token (simpler, recommended for personal use)
+DISCOGS_USER_TOKEN=
+
+# Option 2: OAuth Consumer Key/Secret (for applications)
+# DISCOGS_CONSUMER_KEY=
+# DISCOGS_CONSUMER_SECRET=
+
+# =============================================================================
+# Spotify API (https://developer.spotify.com/dashboard)
+# =============================================================================
+SPOTIFY_CLIENT_ID=
+SPOTIFY_CLIENT_SECRET=
+
+# =============================================================================
+# Database Configuration (optional - auto-configured if not set)
+# =============================================================================
+# SONGBASE_DATABASE_URL=postgresql://user:pass@host:port/dbname
+# SONGBASE_IMAGE_DATABASE_URL=postgresql://user:pass@host:port/dbname
+
+# =============================================================================
+# MusicBrainz Configuration (optional - uses defaults if not set)
+# =============================================================================
+# SONGBASE_MUSICBRAINZ_RETRIES=2
+# SONGBASE_MUSICBRAINZ_SEARCH_LIMIT=10
+# SONGBASE_MUSICBRAINZ_MIN_TITLE_SIMILARITY=0.72
+# SONGBASE_MUSICBRAINZ_MIN_ARTIST_SIMILARITY=0.6
+ENVEOF
+  echo "Created .env file at ${ROOT_DIR}/.env"
+  echo "Edit this file to add your API credentials for enhanced metadata fetching."
+  echo ""
+fi
+
+# Load environment variables from .env
+if [ -f "${ROOT_DIR}/.env" ]; then
+  set -a
+  source "${ROOT_DIR}/.env"
+  set +a
+fi
 PY_RUN="${ROOT_DIR}/scripts/use_local_python.sh"
 
 cd "${ROOT_DIR}"
@@ -18,6 +67,17 @@ if [ -z "${SONGBASE_DATABASE_URL:-}" ] || [ -z "${SONGBASE_IMAGE_DATABASE_URL:-}
   eval "$("${PY_RUN}" -m backend.db.local_postgres env)"
 fi
 export SONGBASE_SKIP_DB_BOOTSTRAP=1
+
+# Kill any existing processes on ports 8000 and 3000
+echo "Checking for existing processes on ports 8000 and 3000..."
+for port in 8000 3000; do
+  pids=$(lsof -ti :$port 2>/dev/null || true)
+  if [ -n "$pids" ]; then
+    echo "Killing existing processes on port $port (PIDs: $pids)"
+    echo "$pids" | xargs kill -9 2>/dev/null || true
+    sleep 0.5
+  fi
+done
 
 # Start backend API server
 echo "Starting FastAPI backend on http://localhost:8000"

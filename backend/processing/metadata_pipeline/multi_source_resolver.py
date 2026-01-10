@@ -8,6 +8,7 @@ from typing import Any, Callable
 
 from . import config
 from . import spotify_client
+from . import discogs_client
 from .filename_parser import (
     STOP_WORDS,
     ArtistLookupFn,
@@ -20,6 +21,7 @@ from .filename_parser import (
     should_parse_filename,
 )
 from .musicbrainz_client import RecordingMatch, resolve_match as musicbrainz_resolve
+from .discogs_client import DiscogsMatch, resolve_match as discogs_resolve
 
 
 @dataclass
@@ -43,6 +45,13 @@ class MetadataMatch:
     spotify_album_id: str | None = None
     # Wikidata IDs (if available)
     wikidata_id: str | None = None
+    # Discogs IDs (if available)
+    discogs_release_id: int | None = None
+    discogs_master_id: int | None = None
+    # Discogs additional metadata
+    discogs_genres: list[str] | None = None
+    discogs_styles: list[str] | None = None
+    discogs_cover_url: str | None = None
 
 
 StatusCallback = Callable[[str], None]
@@ -177,6 +186,38 @@ def _match_from_spotify(track: dict[str, Any]) -> MetadataMatch | None:
     )
 
 
+def _match_from_discogs(match: DiscogsMatch) -> MetadataMatch:
+    """Convert a DiscogsMatch to a MetadataMatch."""
+    # Parse track number if it's a string like "A1", "B2", etc.
+    track_num = None
+    if match.track_number:
+        # Try to extract numeric part
+        import re
+        num_match = re.search(r'(\d+)', match.track_number)
+        if num_match:
+            track_num = int(num_match.group(1))
+
+    # Combine genres and styles for tags
+    tags = list(match.genres) + list(match.styles)
+
+    return MetadataMatch(
+        title=match.title,
+        artists=match.artists,
+        album=match.album,
+        duration_sec=match.duration_sec,
+        release_year=match.release_year,
+        track_number=track_num,
+        tags=tags[:10],  # Limit to 10 tags
+        score=match.score,
+        source="discogs",
+        discogs_release_id=match.release_id,
+        discogs_master_id=match.master_id,
+        discogs_genres=match.genres,
+        discogs_styles=match.styles,
+        discogs_cover_url=match.cover_image_url,
+    )
+
+
 def resolve_multi_source(
     title: str,
     artist: str | None,
@@ -226,6 +267,26 @@ def resolve_multi_source(
                         return spotify_match
     elif status_callback:
         status_callback("⚠ Spotify not configured (skipping)")
+
+    # Try Discogs as a fallback
+    if discogs_client.is_discogs_configured():
+        if status_callback:
+            status_callback("→ Trying Discogs...")
+        for title_variant in title_variants:
+            for artist_variant in artist_candidates:
+                discogs_match = discogs_resolve(
+                    title_variant,
+                    artist_variant,
+                    artists=artist_variants or artists,
+                    album=album_candidate,
+                    duration_sec=duration_sec,
+                    min_score=min_score,
+                    rate_limit_seconds=rate_limit_seconds,
+                )
+                if discogs_match:
+                    return _match_from_discogs(discogs_match)
+    elif status_callback:
+        status_callback("⚠ Discogs not configured (skipping)")
 
     return None
 

@@ -78,3 +78,18 @@ WIKIDATA_SPARQL_URL = "https://query.wikidata.org/sparql"
 WIKIDATA_RATE_LIMIT_SECONDS = float(os.environ.get("WIKIDATA_RATE_LIMIT_SECONDS", "0.5"))
 WIKIDATA_REQUEST_TIMEOUT_SEC = 15
 WIKIDATA_REQUEST_RETRIES = int(os.environ.get("WIKIDATA_REQUEST_RETRIES", "3"))
+
+# Discogs API Configuration
+# Get credentials from: https://www.discogs.com/settings/developers
+DISCOGS_CONSUMER_KEY = os.environ.get("DISCOGS_CONSUMER_KEY", "")
+DISCOGS_CONSUMER_SECRET = os.environ.get("DISCOGS_CONSUMER_SECRET", "")
+DISCOGS_USER_TOKEN = os.environ.get("DISCOGS_USER_TOKEN", "")  # Personal access token (simpler auth)
+DISCOGS_API_URL = "https://api.discogs.com"
+DISCOGS_RATE_LIMIT_SECONDS = float(os.environ.get("DISCOGS_RATE_LIMIT_SECONDS", "1.0"))  # Discogs rate limit: 60/min
+DISCOGS_REQUEST_TIMEOUT_SEC = 15
+DISCOGS_REQUEST_RETRIES = int(os.environ.get("DISCOGS_REQUEST_RETRIES", "3"))
+DISCOGS_SEARCH_LIMIT = int(os.environ.get("DISCOGS_SEARCH_LIMIT", "10"))
+DISCOGS_MIN_SCORE = int(os.environ.get("DISCOGS_MIN_SCORE", "70"))
+DISCOGS_MIN_TITLE_SIMILARITY = float(os.environ.get("DISCOGS_MIN_TITLE_SIMILARITY", "0.72"))
+DISCOGS_MIN_ARTIST_SIMILARITY = float(os.environ.get("DISCOGS_MIN_ARTIST_SIMILARITY", "0.6"))
+IMAGE_SOURCE_DISCOGS = "discogs"

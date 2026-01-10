@@ -14,6 +14,7 @@ import musicbrainzngs
 from backend.db.connection import get_connection
 
 from . import config, musicbrainz_client, spotify_client, wikidata_client
+from .artist_lookup import lookup_artist
 from .album_pipeline import sync_release_metadata
 from .image_db import (
     album_image_exists,
@@ -34,6 +35,8 @@ class SongCandidate:
     album: str | None
     artist: str | None
     recording_id: str | None
+    release_id: str | None  # Pre-verified MusicBrainz release ID
+    artist_id: int | None  # Database artist ID for fuzzy matching
 
 
 @dataclass(frozen=True)
@@ -151,22 +154,36 @@ def _album_key(title: str | None, artist: str | None) -> str:
 
 
 def _fetch_song_candidates(limit: int | None) -> list[SongCandidate]:
+    """
+    Fetch verified songs with all available MusicBrainz metadata.
+
+    Prioritizes songs that have pre-verified release IDs to skip redundant
+    MusicBrainz lookups.
+    """
     query = """
         SELECT
             s.sha_id,
             s.title,
             s.album,
             s.musicbrainz_recording_id,
+            s.musicbrainz_release_id,
             COALESCE(
                 MAX(a.name) FILTER (WHERE sa.role = 'primary'),
                 MAX(a.name)
-            ) AS artist_name
+            ) AS artist_name,
+            COALESCE(
+                MAX(a.artist_id) FILTER (WHERE sa.role = 'primary'),
+                MAX(a.artist_id)
+            ) AS artist_id
         FROM metadata.songs s
         LEFT JOIN metadata.song_artists sa ON sa.sha_id = s.sha_id
         LEFT JOIN metadata.artists a ON a.artist_id = sa.artist_id
         WHERE s.verified = TRUE
         GROUP BY s.sha_id
-        ORDER BY s.updated_at ASC
+        ORDER BY
+            -- Prioritize songs with release_id (can skip MB lookup)
+            CASE WHEN s.musicbrainz_release_id IS NOT NULL THEN 0 ELSE 1 END,
+            s.updated_at ASC
     """
     params: list[Any] = []
     if limit:
@@ -184,7 +201,9 @@ def _fetch_song_candidates(limit: int | None) -> list[SongCandidate]:
             title=row[1],
             album=row[2],
             recording_id=row[3],
-            artist=row[4],
+            release_id=row[4],
+            artist=row[5],
+            artist_id=row[6],
         )
         for row in rows
     ]
@@ -203,6 +222,52 @@ def _fetch_artist_candidates(limit: int | None) -> list[ArtistCandidate]:
             rows = cur.fetchall()
 
     return [ArtistCandidate(name=row[0]) for row in rows if row[0]]
+
+
+def _lookup_album_by_release_id(release_id: str) -> tuple[str | None, str | None]:
+    """
+    Look up existing album metadata by MusicBrainz release ID.
+
+    Returns (album_title, artist_name) if found in our database.
+    This avoids redundant MusicBrainz API calls for already-synced albums.
+    """
+    query = """
+        SELECT title, artist_name
+        FROM metadata.albums
+        WHERE musicbrainz_release_id = %s
+        LIMIT 1
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (release_id,))
+            row = cur.fetchone()
+
+    if row:
+        return row[0], row[1]
+    return None, None
+
+
+def _lookup_artist_by_id(artist_id: int) -> tuple[str | None, str | None]:
+    """
+    Look up artist info by database ID.
+
+    Returns (canonical_name, musicbrainz_artist_id) if found.
+    """
+    query = """
+        SELECT a.name, ap.profile_json->'artist'->>'id' AS mb_artist_id
+        FROM metadata.artists a
+        LEFT JOIN media.artist_profiles ap ON ap.artist_name = a.name
+        WHERE a.artist_id = %s
+        LIMIT 1
+    """
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(query, (artist_id,))
+            row = cur.fetchone()
+
+    if row:
+        return row[0], row[1]
+    return None, None
 
 
 def _request_json(url: str, timeout: int) -> dict:
@@ -437,6 +502,7 @@ def _fetch_artist_profile(
 ) -> tuple[dict[str, Any], str | None, str | None]:
     """
     Fetch artist profile and image from multiple sources.
+    Uses fuzzy matching to resolve artist name variants.
     Returns (profile, image_url, image_source) tuple.
     """
     def log(message: str) -> None:
@@ -445,8 +511,15 @@ def _fetch_artist_profile(
         if log_callback:
             log_callback(message)
 
+    # Try fuzzy matching first to get canonical name
+    search_name = artist_name
+    artist_match = lookup_artist(artist_name)
+    if artist_match and artist_match.canonical_name != artist_name:
+        log(f"  → Resolved to canonical name: {artist_match.canonical_name} (similarity: {artist_match.similarity:.2f})")
+        search_name = artist_match.canonical_name
+
     log(f"  → Fetching MusicBrainz profile...")
-    best = _search_artist_by_name(artist_name, rate_limit_seconds)
+    best = _search_artist_by_name(search_name, rate_limit_seconds)
     if not best or not best.get("id"):
         log(f"    ✗ Not found in MusicBrainz")
         # Still try to get image from other sources
@@ -725,18 +798,30 @@ def sync_images_and_profiles(
                     continue
 
                 try:
-                    recording = _resolve_recording(song, rate_limit_seconds)
-                    if not recording:
-                        log(f"  ✗ No recording found")
-                        skipped += 1
-                        send_progress()
-                        continue
+                    # Check if we already have verified release_id - skip MB lookup
+                    if song.release_id:
+                        log(f"  → Using verified release ID: {song.release_id}")
+                        release_id = song.release_id
+                        # Try to get album info from our database first
+                        release_title, artist_name = _lookup_album_by_release_id(release_id)
+                        if not release_title:
+                            release_title = song.album
+                        if not artist_name:
+                            artist_name = song.artist
+                    else:
+                        # Fall back to MusicBrainz lookup
+                        recording = _resolve_recording(song, rate_limit_seconds)
+                        if not recording:
+                            log(f"  ✗ No recording found")
+                            skipped += 1
+                            send_progress()
+                            continue
 
-                    release_id, release_title = _extract_release(
-                        recording,
-                        song.album,
-                    )
-                    artist_name, _artist_id = _extract_primary_artist(recording)
+                        release_id, release_title = _extract_release(
+                            recording,
+                            song.album,
+                        )
+                        artist_name, _artist_id = _extract_primary_artist(recording)
 
                     if release_id and release_id not in synced_releases:
                         synced_releases.add(release_id)

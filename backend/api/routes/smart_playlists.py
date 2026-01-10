@@ -23,6 +23,7 @@ from backend.api.events.library_events import (
     event_to_payload,
     get_library_event_hub,
 )
+from psycopg.types.json import Json
 from backend.db.connection import get_connection
 from backend.services.rule_engine import get_rule_engine, RuleEngineError
 from backend.services.playlist_refresher import (
@@ -407,29 +408,33 @@ async def create_smart_playlist(
         raise HTTPException(status_code=400, detail=str(e))
 
     # Create playlist
-    with get_connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO smart_playlists (
-                    name, description, rules, sort_by, sort_order,
-                    limit_count, auto_refresh
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO smart_playlists (
+                        name, description, rules, sort_by, sort_order,
+                        limit_count, auto_refresh
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    RETURNING playlist_id
+                    """,
+                    (
+                        request.name,
+                        request.description,
+                        Json(request.rules),
+                        request.sort_by,
+                        request.sort_order,
+                        request.limit_count,
+                        request.auto_refresh,
+                    ),
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING playlist_id
-                """,
-                (
-                    request.name,
-                    request.description,
-                    request.rules,
-                    request.sort_by,
-                    request.sort_order,
-                    request.limit_count,
-                    request.auto_refresh,
-                ),
-            )
-            playlist_id = cur.fetchone()[0]
-        conn.commit()
+                playlist_id = cur.fetchone()[0]
+            conn.commit()
+    except Exception as e:
+        logger.exception("Failed to create smart playlist")
+        raise HTTPException(status_code=500, detail=f"Failed to create playlist: {str(e)}")
 
     # Perform initial refresh
     refresher = get_playlist_refresher()
@@ -441,6 +446,9 @@ async def create_smart_playlist(
         )
     except PlaylistRefresherError as e:
         logger.warning(f"Initial refresh failed: {e}")
+        result = {"song_count": 0}
+    except Exception as e:
+        logger.exception("Unexpected error during initial refresh")
         result = {"song_count": 0}
 
     return {
@@ -858,7 +866,7 @@ async def import_smart_playlist(
                 (
                     name,
                     request.description,
-                    request.rules,
+                    Json(request.rules),
                     request.sort_by,
                     request.sort_order,
                     request.limit_count,
@@ -997,7 +1005,20 @@ async def get_smart_playlist(playlist_id: str) -> dict[str, Any]:
                     sps.position,
                     s.title,
                     s.album,
-                    s.album_id,
+                    CASE
+                        WHEN s.album IS NULL OR s.album = '' THEN NULL
+                        ELSE (
+                            SELECT md5(
+                                lower(coalesce(s.album, ''))
+                                || '::'
+                                || lower(coalesce(a_primary.name, ''))
+                            )
+                            FROM metadata.song_artists sa_primary
+                            JOIN metadata.artists a_primary ON a_primary.artist_id = sa_primary.artist_id
+                            WHERE sa_primary.sha_id = s.sha_id AND sa_primary.role = 'primary'
+                            LIMIT 1
+                        )
+                    END as album_id,
                     s.duration_sec,
                     s.release_year,
                     (
@@ -1147,7 +1168,7 @@ async def update_smart_playlist(
         params.append(request.description)
     if request.rules is not None:
         updates.append("rules = %s")
-        params.append(request.rules)
+        params.append(Json(request.rules))
     if request.sort_by is not None:
         updates.append("sort_by = %s")
         params.append(request.sort_by)

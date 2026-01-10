@@ -117,11 +117,17 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                       className="flex-1 flex items-center gap-3 min-w-0"
                     >
                       <img
-                        src={song.albumArt}
+                        src={song.albumArt || '/default-album.svg'}
                         alt=""
                         width={40}
                         height={40}
                         className="rounded object-cover bg-gray-700"
+                        onError={(e) => {
+                          const target = e.target as HTMLImageElement;
+                          if (target.src !== '/default-album.svg') {
+                            target.src = '/default-album.svg';
+                          }
+                        }}
                       />
                       <div className="flex-1 min-w-0">
                         <p className="text-white text-sm truncate">
@@ -160,11 +166,17 @@ export default function Queue({ isOpen, onToggle }: QueueProps) {
                     className="flex items-center gap-3 p-2 rounded-lg opacity-60"
                   >
                     <img
-                      src={song.albumArt}
+                      src={song.albumArt || '/default-album.svg'}
                       alt=""
                       width={40}
                       height={40}
                       className="rounded object-cover bg-gray-700"
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        if (target.src !== '/default-album.svg') {
+                          target.src = '/default-album.svg';
+                        }
+                      }}
                     />
                     <div className="flex-1 min-w-0">
                       <p className="text-white text-sm truncate">

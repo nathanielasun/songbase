@@ -12,6 +12,11 @@ pgvector==0.3.6
 musicbrainzngs==0.7.1
 yt-dlp==2025.2.19
 
+# Audio feature extraction (BPM, key, energy, mood)
+librosa>=0.10.0
+soundfile>=0.12.0
+scipy>=1.10.0
+
 # Optional: Metal GPU acceleration for macOS (Apple Silicon M1/M2/M3)
 # Auto-installed by bootstrap.py on Apple Silicon, or install manually:
 #   pip install tensorflow-metal>=1.1.0

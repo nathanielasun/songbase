@@ -92,12 +92,15 @@ export const FIELD_DEFINITIONS: Record<string, FieldDefinition> = {
   is_liked: { label: 'Is Liked', type: 'boolean', category: 'preference', description: 'Song is liked' },
   is_disliked: { label: 'Is Disliked', type: 'boolean', category: 'preference', description: 'Song is disliked' },
   has_embedding: { label: 'Has Embedding', type: 'boolean', category: 'audio', description: 'Audio analyzed' },
-  bpm: { label: 'BPM', type: 'number', category: 'audio', description: 'Beats per minute' },
+  bpm: { label: 'BPM', type: 'number', category: 'audio', description: 'Beats per minute (60-180)' },
   energy: { label: 'Energy', type: 'number', category: 'audio', description: 'Energy score (0-100)' },
-  key: { label: 'Key', type: 'string', category: 'audio', description: 'Musical key' },
-  key_mode: { label: 'Key Mode', type: 'string', category: 'audio', description: 'Major or minor' },
+  key: { label: 'Key', type: 'string', category: 'audio', description: 'Musical key (C, C#, D, etc.)' },
+  key_mode: { label: 'Key Mode', type: 'string', category: 'audio', description: 'Major or Minor' },
+  key_camelot: { label: 'Camelot Key', type: 'string', category: 'audio', description: 'DJ-friendly key notation (8A, 11B, etc.)' },
   danceability: { label: 'Danceability', type: 'number', category: 'audio', description: 'Danceability score (0-100)' },
-  mood: { label: 'Mood', type: 'string', category: 'audio', description: 'Primary mood' },
+  acousticness: { label: 'Acousticness', type: 'number', category: 'audio', description: 'Acoustic vs electronic (0-100, 100=acoustic)' },
+  instrumentalness: { label: 'Instrumentalness', type: 'number', category: 'audio', description: 'Vocal presence (0-100, 100=instrumental)' },
+  mood: { label: 'Mood', type: 'string', category: 'audio', description: 'Primary mood (happy, sad, energetic, calm, etc.)' },
   similar_to: { label: 'Similar To', type: 'similarity', category: 'advanced', description: 'Top similar songs to a seed' },
 };
 
@@ -178,5 +181,7 @@ export const SORT_OPTIONS = [
   { value: 'bpm', label: 'BPM' },
   { value: 'energy', label: 'Energy' },
   { value: 'danceability', label: 'Danceability' },
+  { value: 'acousticness', label: 'Acousticness' },
+  { value: 'mood', label: 'Mood' },
   { value: 'random', label: 'Random' },
 ];

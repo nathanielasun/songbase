@@ -27,7 +27,8 @@ songbase/
 │   │   │   ├── stats.py      - Listening statistics endpoints
 │   │   │   ├── stats_stream.py - WebSocket real-time stats streaming
 │   │   │   ├── export.py     - Data export and share card endpoints
-│   │   │   └── smart_playlists.py - Rule-based smart playlist endpoints
+│   │   │   ├── smart_playlists.py - Rule-based smart playlist endpoints
+│   │   │   └── features.py   - Audio feature extraction endpoints
 │   │   ├── events/
 │   │   │   └── library_events.py - Library event hub + smart playlist refresh signals
 │   │   ├── app.py            - Main FastAPI application with CORS
@@ -44,7 +45,8 @@ songbase/
 │   │   │   ├── 006_add_artist_fuzzy_matching.sql - Adds pg_trgm, artist variants, song counts
 │   │   │   ├── 007_add_play_history.sql - Adds play_sessions, play_events, listening_streaks tables
 │   │   │   ├── 008_add_smart_playlists.sql - Adds smart_playlists, smart_playlist_songs tables
-│   │   │   └── 009_smart_playlists_phase3.sql - Adds audio_features table + smart playlist indexes
+│   │   │   ├── 009_smart_playlists_phase3.sql - Adds audio_features table + smart playlist indexes
+│   │   │   └── 010_enhance_audio_features.sql - Adds confidence, metadata, and analyzer columns to audio_features
 │   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
@@ -77,6 +79,26 @@ songbase/
 │       │   ├── io.py            - WAV load/save + metadata helpers
 │       │   ├── pipeline.py      - WAV → normalized WAV orchestration
 │       │   └── preprocessing.py - Resample/mono/normalize/trim utilities
+│       ├── feature_pipeline/
+│       │   ├── __init__.py      - Package exports (FeaturePipeline, extractors)
+│       │   ├── config.py        - Feature extraction configuration
+│       │   ├── pipeline.py      - Main orchestration for feature extraction
+│       │   ├── cli.py           - CLI for batch feature extraction
+│       │   ├── extractors/
+│       │   │   ├── __init__.py  - Extractor exports
+│       │   │   ├── base.py      - BaseExtractor and ExtractionResult
+│       │   │   ├── bpm.py       - BPM/tempo detection
+│       │   │   ├── key.py       - Musical key/mode detection
+│       │   │   ├── energy.py    - Energy/intensity extraction
+│       │   │   ├── mood.py      - Rule-based mood classification
+│       │   │   ├── danceability.py - Danceability scoring
+│       │   │   └── acoustic.py  - Acoustic/electronic and instrumentalness
+│       │   ├── db.py            - Database integration for feature extraction
+│       │   └── utils/
+│       │       ├── __init__.py  - Utility exports
+│       │       ├── audio_loader.py - Audio file loading
+│       │       ├── normalization.py - Feature normalization
+│       │       └── aggregation.py - Result aggregation
 │       ├── acquisition_pipeline/
 │       │   ├── __init__.py      - Package entry point for acquisition helpers
 │       │   ├── cli.py           - CLI for song acquisition (yt-dlp)
@@ -94,7 +116,8 @@ songbase/
 │       │   ├── album_pipeline.py  - Album metadata + track list ingestion
 │       │   ├── artist_lookup.py   - Hybrid artist lookup (exact + trigram + popular filter)
 │       │   ├── cli.py            - CLI for MusicBrainz verification
-│       │   ├── config.py         - Configuration for MusicBrainz, Spotify, Wikidata APIs
+│       │   ├── config.py         - Configuration for MusicBrainz, Spotify, Wikidata, Discogs APIs
+│       │   ├── discogs_client.py  - Discogs API client for metadata and images
 │       │   ├── filename_parser.py - Intelligent filename parsing (Artist - Title extraction)
 │       │   ├── image_cli.py       - CLI for cover art + artist profiles
 │       │   ├── image_db.py        - Image DB helpers
@@ -269,7 +292,7 @@ songbase/
   - Metadata: title, artist, album, genre, release_year, duration_sec, track_number, added_at, verified
   - Playback: play_count, last_played, skip_count, completion_rate, last_week_plays, trending, declining
   - Preference: is_liked, is_disliked
-  - Audio: has_embedding, bpm, energy, danceability, key, key_mode, mood
+  - Audio: has_embedding, bpm, energy, danceability, key, key_mode, key_camelot, acousticness, instrumentalness, mood
   - Advanced: similar_to
 - **Usage**:
   ```tsx
@@ -287,6 +310,54 @@ songbase/
     onCancel={() => router.back()}
     isEditing={false}
   />
+  ```
+
+### frontend/components/features/
+- **Purpose**: Audio feature display and filter components for BPM, key, energy, mood, danceability, and acousticness
+- **Key Components**:
+  - `BpmDisplay.tsx`: Tempo display with confidence indicator (low confidence shows ~)
+  - `KeyDisplay.tsx`: Key/mode display with Camelot wheel notation and color coding
+  - `EnergyMeter.tsx`: Energy level bar with color gradient (blue→green→yellow→orange→red)
+  - `MoodBadge.tsx`: Mood category badges with icons (happy, sad, energetic, calm, aggressive, romantic, dark, uplifting)
+  - `DanceabilityMeter.tsx`: Danceability score visualization with dance icon
+  - `AcousticBadge.tsx`: Acoustic/electronic classification badge with instrumentalness
+  - `FeaturePanel.tsx`: Composite panel showing all features (supports compact, full, inline layouts)
+  - `FeatureFilters.tsx`: Filter UI for library/search with BPM range, key selector, energy slider, mood chips
+  - `AudioFeaturesPanel.tsx`: Analysis management UI for Database tab with progress tracking
+- **Usage**:
+  ```tsx
+  import {
+    BpmDisplay,
+    KeyDisplay,
+    EnergyMeter,
+    MoodBadge,
+    FeaturePanel,
+    FeatureFilters,
+    AudioFeaturesPanel,
+    type AudioFeatures,
+    type FeatureFilterState,
+  } from '@/components/features';
+
+  // Display all features for a song
+  <FeaturePanel features={songFeatures} layout="full" showCamelot={true} />
+
+  // Compact display for song lists
+  <FeaturePanel features={songFeatures} layout="compact" />
+
+  // Individual components
+  <BpmDisplay bpm={128} confidence={0.95} size="lg" />
+  <KeyDisplay keyName="A" mode="Minor" camelot="8A" showCamelot />
+  <MoodBadge mood="energetic" secondary="happy" showSecondary />
+
+  // Filter UI
+  <FeatureFilters
+    filters={filterState}
+    onChange={setFilterState}
+    onClear={() => setFilterState(DEFAULT_FEATURE_FILTERS)}
+  />
+
+  // Analysis management (used in Database tab)
+  <AudioFeaturesPanel />
   ```
 
 ### frontend/components/stats/ShareCard.tsx
@@ -353,7 +424,7 @@ try {
   - CORS middleware (allows requests from http://localhost:3000)
   - Auto-generated OpenAPI docs at `/docs`
   - Health check endpoint at `/health`
-  - Routes organized by domain (processing, library, settings, acquisition, playback, stats, stats_stream, export)
+  - Routes organized by domain (processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists, features)
   - Auto-bootstraps local Postgres if database URLs are missing
 
 ### backend/api/routes/processing.py
@@ -472,6 +543,8 @@ try {
   - `POST /api/settings/retention/cleanup`: Run cleanup of old data based on retention policy
   - `POST /api/settings/retention/delete-all`: Delete ALL play history (requires `confirm: "DELETE_ALL"`)
   - `DELETE /api/settings/retention/song/{sha_id}`: Delete play history for a specific song
+  - `GET /api/settings/features`: Get audio feature extraction configuration and stats
+  - `PUT /api/settings/features`: Update feature extraction settings (enabled, auto_analyze, extractors)
 - **Usage**:
   ```bash
   curl http://localhost:8000/api/settings
@@ -516,6 +589,14 @@ try {
 
   # Delete play history for a specific song
   curl -X DELETE http://localhost:8000/api/settings/retention/song/{sha_id}
+
+  # Get audio feature extraction settings
+  curl http://localhost:8000/api/settings/features
+
+  # Update feature extraction settings
+  curl -X PUT http://localhost:8000/api/settings/features \
+    -H "Content-Type: application/json" \
+    -d '{"enabled":true,"auto_analyze":true,"extractors":{"bpm":true,"key":true,"mood":false}}'
   ```
 
 ### backend/api/routes/playback.py
@@ -780,6 +861,51 @@ try {
   curl http://localhost:8000/api/playlists/smart/{playlist_id}/explain
   ```
 
+### backend/api/routes/features.py
+- **Purpose**: Audio feature extraction API (BPM, key, energy, mood, danceability, acousticness)
+- **Endpoints**:
+  - `GET /api/features/{sha_id}`: Get extracted features for a specific song
+  - `GET /api/features/stats/summary`: Get analysis statistics (analyzed, pending, failed counts)
+  - `POST /api/features/analyze`: Start batch feature analysis
+  - `GET /api/features/analyze/stream`: SSE stream for analysis progress
+  - `POST /api/features/analyze/stop`: Stop ongoing analysis
+  - `GET /api/features/pending`: Get list of songs needing analysis
+  - `GET /api/features/failed`: Get list of songs where analysis failed
+  - `POST /api/features/{sha_id}/reanalyze`: Re-analyze features for a specific song
+- **Feature Fields**:
+  - `bpm`: Tempo in beats per minute (30-300, normalized to 60-180)
+  - `bpm_confidence`: Confidence score (0-1)
+  - `key`: Musical key (C, C#, D, etc.)
+  - `key_mode`: Major or Minor
+  - `key_camelot`: Camelot wheel notation (8B, 12A, etc.)
+  - `key_confidence`: Key detection confidence (0-1)
+  - `energy`: Energy/intensity score (0-100)
+  - `mood_primary`: Primary mood category (happy, sad, energetic, calm, etc.)
+  - `mood_secondary`: Secondary mood if applicable
+  - `danceability`: Danceability score (0-100)
+  - `acousticness`: Acoustic vs electronic score (0-100, 100=acoustic)
+  - `instrumentalness`: Vocal presence (0-100, 100=instrumental)
+- **Usage**:
+  ```bash
+  # Get features for a song
+  curl http://localhost:8000/api/features/{sha_id}
+
+  # Get analysis statistics
+  curl http://localhost:8000/api/features/stats/summary
+
+  # Start batch analysis (use SSE stream for progress)
+  curl -N http://localhost:8000/api/features/analyze/stream?limit=50
+
+  # Stop ongoing analysis
+  curl -X POST http://localhost:8000/api/features/analyze/stop
+
+  # Get songs pending analysis
+  curl http://localhost:8000/api/features/pending?limit=20
+
+  # Re-analyze a specific song
+  curl -X POST http://localhost:8000/api/features/{sha_id}/reanalyze
+  ```
+
 ### backend/api/events/library_events.py
 - **Purpose**: Thread-safe event hub for library and smart playlist refresh events
 - **Used By**: Auto-refresh scheduler, refresh SSE stream
@@ -978,6 +1104,7 @@ try {
 - **Notes**: Appends progress events to `preprocessed_cache/pipeline_state.jsonl`.
 - **Optional**: Add `--images` to sync cover art and artist profiles (requires `SONGBASE_IMAGE_DATABASE_URL`).
 - **Optional**: Add `--run-until-empty` to automatically continue processing batches until the queue is completely empty (downloads and processes in batches based on limits).
+- **Optional**: Add `--features` to extract audio features (BPM, key, mood, etc.) after processing. Use `--features-limit N` to limit the number of songs analyzed.
 - **Preflight**: Verifies `tensorflow`, `tf_slim`, and `resampy` are installed before running embeddings.
 - **UI Behavior**: The web UI does not auto-seed `sources.jsonl` when starting the pipeline; use the Seed action explicitly.
 
@@ -1068,12 +1195,65 @@ try {
   python backend/processing/hash_pipeline/cli.py /path/to/wavs /path/to/normalized
   ```
 
+### backend/processing/feature_pipeline/
+- **Purpose**: Extract audio features (BPM, key, energy, mood, danceability, acousticness) from audio files
+- **Key Modules**:
+  - `config.py`: Feature extraction configuration (sample rates, normalization bounds, weights)
+  - `pipeline.py`: Main orchestration for loading audio and running extractors
+  - `cli.py`: Command-line interface for batch feature extraction
+  - `db.py`: Database integration (save/load features, batch processing from DB)
+  - `extractors/`: Individual feature extractors
+    - `base.py`: BaseExtractor ABC and ExtractionResult dataclass
+    - `bpm.py`: BPM detection using librosa beat tracking
+    - `key.py`: Musical key/mode detection using Krumhansl-Schmuckler profiles
+    - `energy.py`: Energy/intensity extraction (RMS, spectral centroid, onset rate)
+    - `mood.py`: Rule-based mood classification (happy, sad, energetic, calm, etc.)
+    - `danceability.py`: Danceability scoring (beat strength, tempo stability, groove)
+    - `acoustic.py`: Acoustic vs electronic detection and instrumentalness
+  - `utils/`: Utility modules
+    - `audio_loader.py`: Audio file loading with format support and preprocessing
+    - `normalization.py`: Feature value normalization utilities
+    - `aggregation.py`: Aggregate results from multiple extractors
+- **Supported Input Formats**: MP3, WAV, FLAC, OGG, M4A, AAC
+- **Dependencies**: librosa, soundfile, scipy (added to requirements.txt)
+- **Usage**:
+  ```bash
+  # Extract features from a single file
+  python -m backend.processing.feature_pipeline.cli song.mp3
+
+  # Process all files in a directory recursively
+  python -m backend.processing.feature_pipeline.cli ./music/ -r -o features.json
+
+  # Programmatic usage
+  from backend.processing.feature_pipeline import FeaturePipeline, extract_features
+
+  # Quick extraction
+  features = extract_features("song.mp3")
+  # Returns: {"bpm": 120, "key": "C", "mode": "Major", "energy": 75, ...}
+
+  # Full pipeline with options
+  pipeline = FeaturePipeline()
+  result = pipeline.extract_from_file("song.mp3", include_metadata=True)
+  print(result.to_db_columns())  # For database storage
+  ```
+- **Extracted Features**:
+  - `bpm`: Integer 60-180 (tempo in beats per minute)
+  - `key`: String (C, C#, D, D#, E, F, F#, G, G#, A, A#, B)
+  - `mode`: String (Major or Minor)
+  - `camelot`: String (DJ-friendly key notation, e.g., "8A", "11B")
+  - `energy`: Integer 0-100 (overall intensity)
+  - `danceability`: Integer 0-100 (how suitable for dancing)
+  - `acousticness`: Integer 0-100 (acoustic vs electronic)
+  - `instrumentalness`: Integer 0-100 (instrumental vs vocal)
+  - `mood`: String (happy, sad, energetic, calm, aggressive, romantic, dark, uplifting)
+
 ### backend/processing/metadata_pipeline/
 - **Purpose**: Verify and enrich unverified songs via multi-source metadata and automatic image fetching
 - **Key Modules**:
   - `album_pipeline.py`: Album metadata + track list ingestion
   - `cli.py`: Command-line interface for verification
-  - `config.py`: Configuration for MusicBrainz, Spotify, Wikidata APIs
+  - `config.py`: Configuration for MusicBrainz, Spotify, Wikidata, Discogs APIs
+  - `discogs_client.py`: Discogs API client for metadata, genres/styles, and cover art
   - `filename_parser.py`: Intelligent filename parsing to extract artist and title
   - `id3_extractor.py`: MP3 ID3 tag extraction for genres and metadata using mutagen
   - `image_cli.py`: Standalone cover art + artist profile CLI
@@ -1421,6 +1601,7 @@ The metadata pipeline now supports fetching metadata and images from multiple so
 2. **Cover Art Archive** - Free album cover repository (linked to MusicBrainz)
 3. **Wikidata** - Free knowledge base with artist images from Wikimedia Commons
 4. **Spotify** - Commercial music service (requires API credentials)
+5. **Discogs** - Comprehensive music database with genres, styles, and cover art (requires API credentials)
 
 ### Configuration
 
@@ -1438,6 +1619,36 @@ export SPOTIFY_CLIENT_ID="your_client_id_here"
 export SPOTIFY_CLIENT_SECRET="your_client_secret_here"
 ```
 
+#### Discogs API Setup (Optional)
+
+To enable Discogs as a metadata source, you need to register an application:
+
+1. Go to [Discogs Developer Settings](https://www.discogs.com/settings/developers)
+2. Create a new application (any name/description)
+3. You have two authentication options:
+   - **Personal Access Token** (recommended for single-user): Generate a token from the Developers page
+   - **Consumer Key/Secret**: For OAuth-based authentication
+
+4. Set environment variables:
+
+```bash
+# Option 1: Personal Access Token (simpler)
+export DISCOGS_USER_TOKEN="your_personal_access_token"
+
+# Option 2: Consumer Key/Secret
+export DISCOGS_CONSUMER_KEY="your_consumer_key"
+export DISCOGS_CONSUMER_SECRET="your_consumer_secret"
+```
+
+**Discogs Features:**
+- Release metadata (album, year, label, catalog number)
+- Track listings with durations
+- Genre and style tags (more granular than other sources)
+- High-quality cover art
+- Country and format information (CD, Vinyl, Digital, etc.)
+
+**Rate Limits:** 60 requests/minute (authenticated), 25 requests/minute (unauthenticated)
+
 #### Wikidata
 
 Wikidata is enabled by default and requires no API keys. It queries the free Wikidata API and Wikimedia Commons for artist images.
@@ -1446,15 +1657,22 @@ Wikidata is enabled by default and requires no API keys. It queries the free Wik
 
 The pipeline tries multiple sources in order until it finds the requested data:
 
+**For Metadata Verification:**
+1. MusicBrainz (primary source with comprehensive recording database)
+2. Spotify (if configured, provides high-confidence matches)
+3. Discogs (if configured, provides rich genre/style information)
+
 **For Artist Images:**
 1. MusicBrainz URL relations (if artist has image link)
 2. Wikidata (via MusicBrainz Wikidata link if available)
 3. Wikidata search (by artist name)
 4. Spotify (if configured)
+5. Discogs (if configured)
 
 **For Album Cover Art:**
 1. Cover Art Archive (via MusicBrainz release ID)
 2. Spotify (if configured)
+3. Discogs (if configured, via release ID)
 
 ### Status Messages
 

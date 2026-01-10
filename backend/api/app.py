@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists
+from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists, features
 from backend.processing import dependencies
 from backend.db import local_postgres
 
@@ -29,6 +29,7 @@ app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(stats_stream.router, prefix="/api/stats/stream", tags=["stats-stream"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
 app.include_router(smart_playlists.router, prefix="/api/playlists/smart", tags=["smart-playlists"])
+app.include_router(features.router, prefix="/api/features", tags=["features"])
 
 @app.on_event("startup")
 async def ensure_runtime_dependencies() -> None:

@@ -660,3 +660,72 @@ async def delete_song_history(sha_id: str) -> dict[str, Any]:
         "sha_id": sha_id,
         "deleted": results,
     }
+
+
+# ============================================================================
+# Audio Feature Extraction Settings
+# ============================================================================
+
+class FeatureConfigPatch(BaseModel):
+    enabled: bool | None = None
+    auto_analyze: bool | None = None
+    extractors: dict[str, bool] | None = None
+
+
+@router.get("/features")
+async def get_feature_settings() -> dict[str, Any]:
+    """Get audio feature extraction configuration and statistics."""
+    from backend.processing.feature_pipeline.db import get_feature_stats
+    from backend.processing.feature_pipeline.config import FeatureConfig
+
+    # Get stored settings
+    settings = app_settings.load_settings()
+    feature_settings = settings.get("features", {})
+
+    # Get default config
+    default_config = FeatureConfig()
+
+    # Merge with defaults
+    config = {
+        "enabled": feature_settings.get("enabled", True),
+        "auto_analyze": feature_settings.get("auto_analyze", False),
+        "extractors": feature_settings.get("extractors", default_config.extractors),
+    }
+
+    # Get analysis stats
+    try:
+        stats = await get_feature_stats()
+    except Exception as e:
+        logger.warning(f"Failed to get feature stats: {e}")
+        stats = None
+
+    return {
+        "config": config,
+        "stats": stats,
+    }
+
+
+@router.put("/features")
+async def update_feature_settings(payload: FeatureConfigPatch) -> dict[str, Any]:
+    """Update audio feature extraction configuration."""
+    patch: dict[str, Any] = {}
+
+    if payload.enabled is not None:
+        patch["enabled"] = payload.enabled
+    if payload.auto_analyze is not None:
+        patch["auto_analyze"] = payload.auto_analyze
+    if payload.extractors is not None:
+        # Validate extractor names
+        valid_extractors = {"bpm", "key", "energy", "mood", "danceability", "acoustic"}
+        invalid = set(payload.extractors.keys()) - valid_extractors
+        if invalid:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid extractor names: {invalid}. Valid: {valid_extractors}"
+            )
+        patch["extractors"] = payload.extractors
+
+    if patch:
+        app_settings.update_settings({"features": patch})
+
+    return await get_feature_settings()

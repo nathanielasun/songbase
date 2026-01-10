@@ -141,6 +141,8 @@ class OrchestratorConfig:
     image_rate_limit: float | None
     sources_file: Path | None
     run_until_empty: bool
+    features: bool
+    features_limit: int | None
 
 
 def _sha256_file(path: Path) -> str:
@@ -799,6 +801,17 @@ def _parse_args() -> OrchestratorConfig:
         action="store_true",
         help="Continue processing batches until queue is empty.",
     )
+    parser.add_argument(
+        "--features",
+        action="store_true",
+        help="Extract audio features (BPM, key, energy, mood) after processing.",
+    )
+    parser.add_argument(
+        "--features-limit",
+        type=int,
+        default=None,
+        help="Maximum number of songs to analyze for audio features.",
+    )
 
     args = parser.parse_args()
     sources_file = Path(args.sources_file).expanduser().resolve() if args.sources_file else None
@@ -821,6 +834,8 @@ def _parse_args() -> OrchestratorConfig:
         image_rate_limit=args.image_rate_limit,
         sources_file=sources_file,
         run_until_empty=args.run_until_empty,
+        features=args.features,
+        features_limit=args.features_limit,
     )
 
 
@@ -977,6 +992,40 @@ def run_orchestrator(
                 f"Artist profiles: {result.artist_profiles}, "
                 f"Artist images: {result.artist_images}, "
                 f"Failed: {result.failed}"
+            )
+
+    if config.features and not config.dry_run:
+        if _stop_requested(stop_event):
+            state.append({"stage": "stop_requested", "ts": utc_now()})
+            print("Stop requested. Skipping audio feature extraction.")
+        else:
+            import asyncio
+            from backend.processing.feature_pipeline.db import process_batch as extract_features_batch
+
+            def stop_check():
+                return _stop_requested(stop_event)
+
+            def progress_callback(data):
+                current = data.get("current", 0)
+                total = data.get("total", 0)
+                title = data.get("title", "")[:30]
+                status = data.get("status", "")
+                print(f"  [{current}/{total}] {title}: {status}")
+
+            print("Extracting audio features...")
+            result = asyncio.get_event_loop().run_until_complete(
+                extract_features_batch(
+                    limit=config.features_limit or 100,
+                    force=False,
+                    progress_callback=progress_callback,
+                    stop_check=stop_check,
+                )
+            )
+            print(
+                "Feature extraction complete. "
+                f"Processed: {result['processed']}, "
+                f"Failed: {result['failed']}, "
+                f"Skipped: {result['skipped']}"
             )
 
     state.append({"stage": "finished", "ts": utc_now()})

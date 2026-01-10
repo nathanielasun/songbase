@@ -18,6 +18,7 @@ import {
 import { PlayIcon } from '@heroicons/react/24/solid';
 import { CollapsibleSection } from './components/CollapsibleSection';
 import { CollapsiblePanel } from './components/CollapsiblePanel';
+import { AudioFeaturesPanel } from '@/components/features';
 
 // Direct backend URL for SSE connections (bypasses Next.js proxy which can buffer streams)
 const SSE_BACKEND_URL = process.env.NEXT_PUBLIC_SSE_BACKEND_URL || 'http://localhost:8000';
@@ -2453,6 +2454,9 @@ export default function LibraryPage() {
                     )}
                   </section>
                 </div>
+
+                {/* Audio Features Panel */}
+                <AudioFeaturesPanel />
 
                 <section className="rounded-2xl bg-gray-900/70 p-6 border border-gray-800">
                   <div className="flex items-center justify-between">
