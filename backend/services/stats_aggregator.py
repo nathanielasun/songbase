@@ -220,6 +220,9 @@ class StatsAggregator:
                         ps.sha_id,
                         s.title,
                         COALESCE(a.name, 'Unknown Artist') as artist,
+                        a.artist_id,
+                        s.album,
+                        s.duration_sec,
                         COUNT(*) as play_count,
                         SUM(ps.duration_played_ms) as total_duration_ms,
                         ROUND(AVG(ps.completion_percent)::numeric, 2) as avg_completion
@@ -228,7 +231,7 @@ class StatsAggregator:
                     LEFT JOIN metadata.song_artists sa ON s.sha_id = sa.sha_id AND sa.role = 'primary'
                     LEFT JOIN metadata.artists a ON sa.artist_id = a.artist_id
                     WHERE ps.started_at >= %s AND ps.started_at < %s
-                    GROUP BY ps.sha_id, s.title, a.name
+                    GROUP BY ps.sha_id, s.title, a.name, a.artist_id, s.album, s.duration_sec
                     ORDER BY play_count DESC, total_duration_ms DESC
                     LIMIT %s
                     """,
@@ -241,9 +244,12 @@ class StatsAggregator:
                 "sha_id": row[0],
                 "title": row[1] or "Unknown",
                 "artist": row[2],
-                "play_count": row[3],
-                "total_duration_ms": row[4] or 0,
-                "avg_completion": float(row[5]) if row[5] else 0,
+                "artist_id": row[3],
+                "album": row[4],
+                "duration_sec": row[5] or 0,
+                "play_count": row[6],
+                "total_duration_ms": row[7] or 0,
+                "avg_completion": float(row[8]) if row[8] else 0,
             }
             for row in rows
         ]
@@ -373,6 +379,8 @@ class StatsAggregator:
                         ps.sha_id,
                         s.title,
                         COALESCE(a.name, 'Unknown Artist') as artist,
+                        a.artist_id,
+                        s.album,
                         ps.started_at,
                         ps.duration_played_ms,
                         ps.completed,
@@ -397,13 +405,15 @@ class StatsAggregator:
                 "sha_id": row[1],
                 "title": row[2] or "Unknown",
                 "artist": row[3],
-                "started_at": row[4].isoformat() if row[4] else None,
-                "duration_played_ms": row[5] or 0,
-                "completed": row[6],
-                "skipped": row[7],
-                "context_type": row[8],
-                "context_id": row[9],
-                "completion_percent": float(row[10]) if row[10] else 0,
+                "artist_id": row[4],
+                "album": row[5],
+                "started_at": row[6].isoformat() if row[6] else None,
+                "duration_played_ms": row[7] or 0,
+                "completed": row[8],
+                "skipped": row[9],
+                "context_type": row[10],
+                "context_id": row[11],
+                "completion_percent": float(row[12]) if row[12] else 0,
             }
             for row in rows
         ]

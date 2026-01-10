@@ -37,6 +37,20 @@ def _schedule_broadcast(sha_id: str, event_type: str, session_id: str | None = N
         logger.debug(f"Could not broadcast event: {e}")
 
 
+def _emit_library_event(
+    event_type: str,
+    sha_id: str | None = None,
+    payload: dict[str, Any] | None = None,
+) -> None:
+    """Emit a library event for smart playlist refresh scheduling."""
+    try:
+        from backend.api.events.library_events import emit_library_event
+
+        emit_library_event(event_type, sha_id=sha_id, payload=payload)
+    except Exception as e:
+        logger.debug(f"Could not emit library event: {e}")
+
+
 class PlaybackTracker:
     """Service for tracking playback sessions and events."""
 
@@ -258,6 +272,11 @@ class PlaybackTracker:
                 row = cur.fetchone()
                 if row:
                     _schedule_broadcast(row[0], "complete", session_id)
+                    _emit_library_event(
+                        "play_history_updated",
+                        sha_id=row[0],
+                        payload={"event": "complete", "session_id": session_id},
+                    )
 
         return {
             "success": True,
@@ -359,6 +378,11 @@ class PlaybackTracker:
                 if row:
                     event_type = "skip" if skipped else "end"
                     _schedule_broadcast(row[0], event_type, session_id)
+                    _emit_library_event(
+                        "play_history_updated",
+                        sha_id=row[0],
+                        payload={"event": event_type, "session_id": session_id},
+                    )
 
         return {
             "success": True,

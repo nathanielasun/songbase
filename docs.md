@@ -26,7 +26,10 @@ songbase/
 │   │   │   ├── playback.py   - Play session tracking endpoints
 │   │   │   ├── stats.py      - Listening statistics endpoints
 │   │   │   ├── stats_stream.py - WebSocket real-time stats streaming
-│   │   │   └── export.py     - Data export and share card endpoints
+│   │   │   ├── export.py     - Data export and share card endpoints
+│   │   │   └── smart_playlists.py - Rule-based smart playlist endpoints
+│   │   ├── events/
+│   │   │   └── library_events.py - Library event hub + smart playlist refresh signals
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
 │   ├── bootstrap.py     - Python dependency bootstrapper
@@ -39,7 +42,9 @@ songbase/
 │   │   │   ├── 004_update_download_queue.sql - Adds queue tracking fields
 │   │   │   ├── 005_add_album_metadata.sql - Adds album metadata + track list tables
 │   │   │   ├── 006_add_artist_fuzzy_matching.sql - Adds pg_trgm, artist variants, song counts
-│   │   │   └── 007_add_play_history.sql - Adds play_sessions, play_events, listening_streaks tables
+│   │   │   ├── 007_add_play_history.sql - Adds play_sessions, play_events, listening_streaks tables
+│   │   │   ├── 008_add_smart_playlists.sql - Adds smart_playlists, smart_playlist_songs tables
+│   │   │   └── 009_smart_playlists_phase3.sql - Adds audio_features table + smart playlist indexes
 │   │   ├── build_postgres_bundle.py - Build Postgres + pgvector bundle archives
 │   │   ├── connection.py     - Postgres connection helper
 │   │   ├── embeddings.py     - Shared pgvector ingestion helpers
@@ -111,7 +116,10 @@ songbase/
 │       ├── stats_aggregator.py - Listening statistics aggregation service
 │       ├── play_history_signals.py - Behavioral signals from play history for recommendations
 │       ├── performance.py - Event batching, query caching, materialized view refresh
-│       └── data_retention.py - Data cleanup jobs and privacy controls
+│       ├── data_retention.py - Data cleanup jobs and privacy controls
+│       ├── rule_engine.py - Smart playlist rule parsing, validation, and SQL compilation
+│       ├── playlist_refresher.py - Smart playlist song list refresh service
+│       └── playlist_refresh_scheduler.py - Debounced auto-refresh worker for smart playlists
 ├── backend/tests/
 │   └── test_orchestrator_integration.py - End-to-end pipeline smoke test (opt-in)
 ├── scripts/
@@ -210,6 +218,77 @@ songbase/
   - Add songs to other playlists via modal
 - **Notes**: Liked song IDs come from `UserPreferencesContext` (localStorage); song details are fetched from backend
 
+### frontend/app/playlist/smart/new/page.tsx
+- **Purpose**: Create new smart playlist page with template gallery
+- **Uses**: `/api/playlists/smart/templates`, `/api/playlists/smart`
+- **Features**:
+  - Template gallery with categorized preset templates
+  - "Create from Scratch" option for custom rules
+  - Full RuleBuilder component for defining rules
+  - Live preview of matching songs
+  - Sort options and song limit configuration
+- **Notes**: After creation, redirects to the new smart playlist view page
+
+### frontend/app/playlist/smart/[id]/page.tsx
+- **Purpose**: View and manage a smart playlist
+- **Uses**: `/api/playlists/smart/{playlist_id}`, `/api/playlists/smart/{playlist_id}/explain`, `/api/playlists/smart/{playlist_id}/refresh`
+- **Features**:
+  - Gradient header with bolt icon indicating smart playlist
+  - Human-readable rule explanation
+  - Song list with play controls
+  - Manual refresh button
+  - Edit and delete options
+  - Play all button
+  - Stats: song count, total duration, last refresh time
+- **Notes**: Songs are cached in smart_playlist_songs table; refresh recalculates based on current rules
+
+### frontend/app/playlist/smart/[id]/edit/page.tsx
+- **Purpose**: Edit an existing smart playlist's rules
+- **Uses**: `/api/playlists/smart/{playlist_id}` (GET and PUT)
+- **Features**:
+  - Full RuleBuilder component pre-populated with existing rules
+  - Live preview updates as rules change
+  - Cancel returns to playlist view
+  - Save updates rules and auto-refreshes playlist
+- **Notes**: Playlist is automatically refreshed after rules are updated
+
+### frontend/components/smart-playlists/
+- **Purpose**: Reusable components for smart playlist rule building
+- **Key Components**:
+  - `RuleBuilder.tsx`: Main rule builder with name, description, rules, sorting, preview
+  - `ConditionGroup.tsx`: Recursive component for AND/OR condition groups
+  - `ConditionRow.tsx`: Single condition with field, operator, value
+  - `FieldSelector.tsx`: Dropdown for selecting rule fields (grouped by category)
+  - `OperatorSelector.tsx`: Dropdown for operators (dynamic based on field type)
+  - `ValueInput.tsx`: Dynamic input based on field type and operator
+  - `TemplateGallery.tsx`: Grid of template cards with categories
+  - `TemplateCard.tsx`: Individual template card with icon and description
+  - `types.ts`: TypeScript interfaces and constants
+- **Notes**: RuleBuilder surfaces preset rules and suggested rules for quick inserts.
+- **Field Categories**:
+  - Metadata: title, artist, album, genre, release_year, duration_sec, track_number, added_at, verified
+  - Playback: play_count, last_played, skip_count, completion_rate, last_week_plays, trending, declining
+  - Preference: is_liked, is_disliked
+  - Audio: has_embedding, bpm, energy, danceability, key, key_mode, mood
+  - Advanced: similar_to
+- **Usage**:
+  ```tsx
+  import { RuleBuilder, rulesToApi, rulesFromApi } from '@/components/smart-playlists';
+
+  <RuleBuilder
+    initialData={existingPlaylist}
+    onSave={async (data) => {
+      const apiRules = rulesToApi(data.rules);
+      await fetch('/api/playlists/smart', {
+        method: 'POST',
+        body: JSON.stringify({ ...data, rules: apiRules })
+      });
+    }}
+    onCancel={() => router.back()}
+    isEditing={false}
+  />
+  ```
+
 ### frontend/components/stats/ShareCard.tsx
 - **Purpose**: Shareable listening stats card component for social sharing
 - **Features**:
@@ -236,6 +315,7 @@ songbase/
 ### frontend/contexts/UserPreferencesContext.tsx
 - **Purpose**: Client-side storage of user preferences (likes/dislikes)
 - **Storage**: `localStorage` with key `songbase_user_preferences`
+- **Sync**: Sends liked/disliked IDs to `/api/playlists/smart/preferences/changed` for smart playlist auto-refresh.
 - **Key Functions**:
   - `likeSong(songId)`: Toggle like status for a song
   - `dislikeSong(songId)`: Toggle dislike status for a song
@@ -597,6 +677,160 @@ try {
   curl "http://localhost:8000/api/export/share-card?type=top-song&period=month"
   ```
 
+### backend/api/routes/smart_playlists.py
+- **Purpose**: Rule-based smart playlist management with automatic song population
+- **Endpoints**:
+  - `POST /api/playlists/smart`: Create a new smart playlist with rules
+  - `GET /api/playlists/smart`: List all smart playlists
+  - `GET /api/playlists/smart/templates`: Get available smart playlist templates
+  - `GET /api/playlists/smart/presets`: List rule presets
+  - `POST /api/playlists/smart/suggest`: Suggest rules from library composition
+  - `POST /api/playlists/smart/convert`: Convert a static playlist to smart rules
+  - `POST /api/playlists/smart/import`: Import a smart playlist definition
+  - `POST /api/playlists/smart/share`: Encode a shareable rules token
+  - `GET /api/playlists/smart/share/{token}`: Decode a shared rules token
+  - `POST /api/playlists/smart/from-template/{template_id}`: Create playlist from template
+  - `GET /api/playlists/smart/preview`: Preview rule results without saving
+  - `POST /api/playlists/smart/preview`: Preview rules (POST version for complex rules)
+  - `POST /api/playlists/smart/preview/explain`: Query plan for preview rules
+  - `GET /api/playlists/smart/refresh/stream`: SSE stream of refresh events
+  - `POST /api/playlists/smart/preferences/changed`: Sync preference changes for auto-refresh
+  - `GET /api/playlists/smart/{playlist_id}`: Get playlist with songs
+  - `GET /api/playlists/smart/{playlist_id}/export`: Export playlist definition
+  - `PUT /api/playlists/smart/{playlist_id}`: Update playlist (auto-refreshes if rules change)
+  - `DELETE /api/playlists/smart/{playlist_id}`: Delete playlist
+  - `POST /api/playlists/smart/{playlist_id}/refresh`: Manually refresh playlist
+  - `POST /api/playlists/smart/refresh-all`: Refresh all auto-refresh playlists
+  - `GET /api/playlists/smart/{playlist_id}/explain`: Get human-readable rule explanation
+- **Rule Schema**:
+  ```json
+  {
+    "version": 1,
+    "match": "all",  // "all" (AND) or "any" (OR)
+    "conditions": [
+      {"field": "genre", "operator": "contains", "value": "Rock"},
+      {"field": "release_year", "operator": "between", "value": [1980, 1989]},
+      {
+        "match": "any",  // Nested group with OR
+        "conditions": [
+          {"field": "artist", "operator": "contains", "value": "Van Halen"},
+          {"field": "artist", "operator": "contains", "value": "Bon Jovi"}
+        ]
+      }
+    ]
+  }
+  ```
+- **Advanced Examples**:
+  ```json
+  {"field": "release_year", "operator": "years_ago", "value": 10}
+  {"field": "artist", "operator": "same_as", "value": "playlist:uuid"}
+  {"field": "similar_to", "operator": "top_n", "value": {"sha_id": "abc...", "count": 10}}
+  ```
+- **Supported Fields**: title, artist, album, genre, release_year, duration_sec, track_number, added_at, play_count, last_played, skip_count, completion_rate, last_week_plays, trending, declining, is_liked, is_disliked, has_embedding, bpm, energy, danceability, key, key_mode, mood, similar_to, verified
+- **Supported Operators**: equals, not_equals, contains, not_contains, starts_with, ends_with, regex, greater, greater_or_equal, less, less_or_equal, between, in_list, not_in_list, is_true, is_false, is_null, is_not_null, before, after, within_days, years_ago, same_as, top_n, never
+- **Default Templates**: Recently Added, Heavy Rotation, Forgotten Favorites, Never Played, Short Songs, Long Songs, Top Rated, Frequently Skipped
+- **Usage**:
+  ```bash
+  # Create smart playlist
+  curl -X POST http://localhost:8000/api/playlists/smart \
+    -H "Content-Type: application/json" \
+    -d '{
+      "name": "80s Rock Classics",
+      "description": "Rock songs from the 1980s",
+      "rules": {
+        "version": 1,
+        "match": "all",
+        "conditions": [
+          {"field": "genre", "operator": "contains", "value": "Rock"},
+          {"field": "release_year", "operator": "between", "value": [1980, 1989]}
+        ]
+      },
+      "sort_by": "release_year",
+      "sort_order": "asc"
+    }'
+
+  # List smart playlists
+  curl http://localhost:8000/api/playlists/smart
+
+  # Get templates
+  curl http://localhost:8000/api/playlists/smart/templates
+
+  # Create from template
+  curl -X POST http://localhost:8000/api/playlists/smart/from-template/{template_id} \
+    -H "Content-Type: application/json" \
+    -d '{"name": "My Recently Added"}'
+
+  # Preview rules
+  curl -X POST http://localhost:8000/api/playlists/smart/preview \
+    -H "Content-Type: application/json" \
+    -d '{
+      "rules": {"version": 1, "match": "all", "conditions": [{"field": "play_count", "operator": "greater", "value": 5}]},
+      "limit": 20
+    }'
+
+  # Get playlist with songs
+  curl http://localhost:8000/api/playlists/smart/{playlist_id}
+
+  # Refresh playlist
+  curl -X POST http://localhost:8000/api/playlists/smart/{playlist_id}/refresh \
+    -H "Content-Type: application/json" \
+    -d '{"liked_song_ids": ["sha1", "sha2"], "disliked_song_ids": []}'
+
+  # Get rule explanation
+  curl http://localhost:8000/api/playlists/smart/{playlist_id}/explain
+  ```
+
+### backend/api/events/library_events.py
+- **Purpose**: Thread-safe event hub for library and smart playlist refresh events
+- **Used By**: Auto-refresh scheduler, refresh SSE stream
+- **Helpers**:
+  - `emit_library_event(event_type, sha_id, payload)`: Broadcast a library event
+  - `get_library_event_hub()`: Subscribe to event stream consumers
+
+### backend/services/rule_engine.py
+- **Purpose**: Parse, validate, and compile smart playlist rules to SQL
+- **Key Classes**:
+  - `RuleEngine`: Main engine for rule processing
+  - `Condition`: Single rule condition (field, operator, value)
+  - `ConditionGroup`: Group of conditions with AND/OR logic
+  - `Operator`: Enum of supported operators
+- **Key Methods**:
+  - `parse(rules_json)`: Parse JSON rules to typed AST
+  - `validate(rules)`: Validate rules and return warnings
+  - `compile_to_sql(rules, liked_ids, disliked_ids)`: Compile to SQL WHERE clause
+  - `explain(rules)`: Generate human-readable explanation
+- **Features**:
+  - Nested condition groups with unlimited depth (capped at 3 for safety)
+  - Type-aware operator validation
+  - SQL injection protection
+  - External field support (likes/dislikes from frontend)
+  - Computed field support (play statistics via CTEs)
+  - Advanced operators (years_ago, same_as, top_n similarity)
+  - Audio feature fields (bpm, energy, danceability, key, mood)
+
+### backend/services/playlist_refresher.py
+- **Purpose**: Execute smart playlist rules and cache results
+- **Key Methods**:
+  - `refresh_single(playlist_id, liked_ids, disliked_ids)`: Refresh one playlist
+  - `refresh_all(liked_ids, disliked_ids)`: Refresh all auto-refresh playlists
+  - `preview_rules(rules, sort_by, sort_order, limit, ...)`: Preview without saving
+  - `explain_rules(rules, ...)`: Return EXPLAIN plan for a rules query
+- **Features**:
+  - Query timeout (30 seconds) to prevent runaway queries
+  - Efficient CTE-based queries for play statistics
+  - Atomic updates with transaction handling
+  - Automatic stat updates after refresh
+  - Playlist reference resolution (`same_as`) and similarity rule support
+  - Preview caching for hot rule edits
+
+### backend/services/playlist_refresh_scheduler.py
+- **Purpose**: Debounced auto-refresh worker for smart playlists
+- **Triggers**: Library changes, play history updates, preference syncs
+- **Features**:
+  - Event batching with debounce window
+  - Auto-refresh filtering by rule fields
+  - Emits refresh status events for SSE streaming
+
 ### backend/services/play_history_signals.py
 - **Purpose**: Extract behavioral signals from play history to enhance recommendations
 - **Key Functions**:
@@ -653,6 +887,10 @@ try {
   SONGBASE_DATABASE_URL=postgres://... python backend/db/migrate.py
   ```
 
+### metadata.audio_features
+- **Purpose**: Optional audio feature table (bpm, energy, danceability, key, mood) for smart playlist rules.
+- **Notes**: Populated by the audio feature extraction pipeline when enabled.
+
 ### backend/db/local_postgres.py
 - **Purpose**: Initialize and start a local Postgres cluster under `.metadata/` and create both databases.
 - **Requires**: `initdb`, `pg_ctl`, `psql`, `createdb` on PATH, plus the pgvector extension installed. The bootstrap auto-detects `pg_config`, Homebrew/Postgres.app, and asdf installs; set `POSTGRES_BIN_DIR` if detection fails.
@@ -661,6 +899,8 @@ try {
   python backend/db/local_postgres.py ensure
   eval "$(python backend/db/local_postgres.py env)"
   ```
+- **Stale State Cleanup**: On startup, clears stale `postmaster.pid` and socket files and attempts to remove the shared memory segment recorded in `postmaster.pid`. If you still see `pre-existing shared memory block`, run `ipcrm -m <id>` (from `.metadata/postgres/data/postmaster.pid`) or reboot, then delete `.metadata/postgres/run/.s.PGSQL.*`.
+- **Bootstrap Lock**: Uses `.metadata/postgres/cluster.lock` to serialize local Postgres startup and prevent concurrent clusters. Set `SONGBASE_DB_LOCK_TIMEOUT` to tune the wait time (seconds).
 - **Bundle Support**: If `POSTGRES_BUNDLE_URL` (or OS-specific URL env vars) is set, it will auto-download a Postgres+pgvector bundle into `backend/processing/bin/postgres` and use it. Use `POSTGRES_BUNDLE_ARCHIVE_ROOT` if the archive has a top-level folder to strip.
 - **Manifest Support**: `POSTGRES_BUNDLE_MANIFEST` (default `backend/processing/postgres_bundle.json`) can supply per-OS bundle URLs + SHA256.
 - **Overrides**: `POSTGRES_BUNDLE_DIR` sets the bundle destination; `SONGBASE_METADATA_DIR` sets the `.metadata` root.
@@ -964,7 +1204,7 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
   - FastAPI backend on http://localhost:8000
   - Next.js frontend on http://localhost:3000
 - **Features**: Automatic cleanup on Ctrl+C
- - **Notes**: Uses the local Python wrapper to create a `.venv`, install dependencies, and bootstrap local Postgres when database URLs are missing.
+- **Notes**: Uses the local Python wrapper to create a `.venv`, install dependencies, and bootstrap local Postgres when database URLs are missing. Sets `SONGBASE_SKIP_DB_BOOTSTRAP=1` to avoid double-bootstrapping in the backend process.
 
 ### backend/api/server.py
 - **Purpose**: Bootstrap dependencies, ensure local Postgres, and start the FastAPI server.

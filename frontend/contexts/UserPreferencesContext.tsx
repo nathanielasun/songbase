@@ -191,6 +191,31 @@ export function UserPreferencesProvider({ children }: { children: ReactNode }) {
   const likedCount = likedSongIds.length;
   const dislikedCount = dislikedSongIds.length;
 
+  useEffect(() => {
+    if (!isInitialized) return;
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      fetch('/api/playlists/smart/preferences/changed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          liked_song_ids: likedSongIds,
+          disliked_song_ids: dislikedSongIds,
+        }),
+        signal: controller.signal,
+      }).catch((error) => {
+        if (error.name !== 'AbortError') {
+          console.error('Failed to sync preferences:', error);
+        }
+      });
+    }, 500);
+
+    return () => {
+      controller.abort();
+      clearTimeout(timer);
+    };
+  }, [likedSongIds, dislikedSongIds, isInitialized]);
+
   return (
     <UserPreferencesContext.Provider
       value={{

@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export
+from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists
 from backend.processing import dependencies
 from backend.db import local_postgres
 
@@ -28,11 +28,16 @@ app.include_router(playback.router, prefix="/api/play", tags=["playback"])
 app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(stats_stream.router, prefix="/api/stats/stream", tags=["stats-stream"])
 app.include_router(export.router, prefix="/api/export", tags=["export"])
+app.include_router(smart_playlists.router, prefix="/api/playlists/smart", tags=["smart-playlists"])
 
 @app.on_event("startup")
 async def ensure_runtime_dependencies() -> None:
     metadata_url = os.environ.get("SONGBASE_DATABASE_URL")
     image_url = os.environ.get("SONGBASE_IMAGE_DATABASE_URL")
+    skip_bootstrap = os.environ.get("SONGBASE_SKIP_DB_BOOTSTRAP") == "1"
+    if skip_bootstrap and metadata_url and image_url:
+        dependencies.ensure_first_run_dependencies()
+        return
     if (
         not metadata_url
         or not image_url
@@ -43,6 +48,14 @@ async def ensure_runtime_dependencies() -> None:
         os.environ["SONGBASE_DATABASE_URL"] = local_postgres.metadata_url()
         os.environ["SONGBASE_IMAGE_DATABASE_URL"] = local_postgres.image_url()
     dependencies.ensure_first_run_dependencies()
+
+
+@app.on_event("startup")
+async def start_background_services() -> None:
+    from backend.services.playlist_refresh_scheduler import get_playlist_refresh_scheduler
+
+    scheduler = get_playlist_refresh_scheduler()
+    scheduler.start()
 
 @app.get("/")
 async def root():

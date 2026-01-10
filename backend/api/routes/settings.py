@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from backend import app_settings
 from backend.db.connection import get_connection
 from backend.db.image_connection import get_image_connection
+from backend.api.events.library_events import emit_library_event
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -171,6 +172,16 @@ async def reset_storage(payload: ResetRequest) -> dict[str, Any]:
                 cur.execute("DELETE FROM media.artist_profiles")
                 cur.execute("DELETE FROM media.image_assets")
             conn.commit()
+
+    emit_library_event(
+        "library_reset",
+        payload={
+            "clear_embeddings": payload.clear_embeddings,
+            "clear_hashed_music": payload.clear_hashed_music,
+            "clear_artist_album": payload.clear_artist_album,
+            "clear_song_metadata": payload.clear_song_metadata,
+        },
+    )
 
     return result
 
@@ -480,6 +491,11 @@ async def recalculate_embeddings_stream(
                 "failed": failed,
             }
             _embedding_task_state["last_result"] = result
+
+            emit_library_event(
+                "embeddings_updated",
+                payload=result,
+            )
 
             yield f"data: {json.dumps({'type': 'complete', **result})}\n\n"
 

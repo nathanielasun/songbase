@@ -268,6 +268,7 @@ Navigate to **For You** in the sidebar to access your personalized radio station
 - **Artwork serving**: `/api/library/images/*` endpoints serve song, album, and artist artwork to the frontend.
 
 When the backend starts and database URLs are missing, it will automatically bootstrap the local Postgres cluster under `.metadata/`.
+Set `SONGBASE_SKIP_DB_BOOTSTRAP=1` to skip redundant bootstrap if your environment already prepared the local databases (for example, when running `./dev.sh`).
 
 ## Listening Analytics
 
@@ -286,6 +287,44 @@ Songbase automatically tracks your listening behavior to provide insights and po
 - Playback context (which playlist, album, or radio the song was played from)
 - Granular events (pause, resume, seek, skip)
 - Listening streaks (consecutive days with play activity)
+
+## Smart Playlists
+
+Create rule-based playlists that automatically populate with matching songs from your library.
+
+**Features:**
+- **Rule builder**: Create complex rules with AND/OR logic and nested condition groups
+- **Multiple field types**: Filter by metadata (title, artist, album, genre, year), playback stats (play count, skip count, completion rate), analytics (last-week plays, trending/declining), and preferences (liked, disliked)
+- **Audio features**: Filter by BPM, energy, danceability, key, and mood when audio features are available
+- **Operators**: Supports equals, contains, greater/less than, between, in list, within days, and more
+- **Advanced rules**: Relative year rules (`years_ago`), cross-playlist matches (`same_as`), and similarity-based matching (`similar_to`)
+- **Live preview**: See matching songs as you build rules
+- **Sort options**: Sort results by date added, title, artist, play count, duration, or random
+- **Song limits**: Optionally limit playlist to a specific number of songs
+- **Auto-refresh**: Playlists automatically update when library changes
+- **Templates**: Quick-start with pre-built templates like "Recently Added", "Heavy Rotation", "Forgotten Favorites"
+- **Presets + suggestions**: Apply rule presets or auto-suggested rules in the builder
+- **Import/Export**: Share and import smart playlist definitions as JSON
+
+**Creating a Smart Playlist:**
+1. Click **Smart Playlist** in the sidebar
+2. Choose a template or "Create from Scratch"
+3. Define your rules using the visual rule builder
+4. Preview matching songs in real-time
+5. Set sorting and limits
+6. Save your playlist
+
+**Example Rules:**
+- Songs added in the last 30 days
+- Rock songs from the 1980s with play count > 5
+- Liked songs you haven't played in 90+ days
+- Songs over 7 minutes that you frequently complete
+
+**Access:**
+- **Sidebar**: Shows all your smart playlists with a bolt icon
+- **New Smart Playlist**: Click "Smart Playlist" in sidebar to create
+- **View/Edit**: Click any smart playlist to view songs or edit rules
+- **Refresh**: Manual refresh button on each playlist to update contents
 
 ## Local Python Runner
 
@@ -410,6 +449,8 @@ Add `--run-until-empty` to automatically continue processing batches until the q
 
 Songbase can bootstrap two local Postgres databases under `.metadata/` (metadata + images). This requires a local Postgres install (`initdb`, `pg_ctl`, `psql`, `createdb`) and the pgvector extension. If the environment variables are not set, `dev.sh` will auto-run this bootstrap. The bootstrap auto-detects `pg_config`, Homebrew/Postgres.app, and asdf installs; set `POSTGRES_BIN_DIR` if detection fails.
 The connection helper will create the `vector` extension on first connect if it is missing.
+The local bootstrap will clear stale `postmaster.pid` and socket files and attempt to remove the shared memory segment recorded in `postmaster.pid` when no server process is running. If startup still fails with `pre-existing shared memory block`, run `ipcrm -m <id>` (from `.metadata/postgres/data/postmaster.pid`) or reboot, then delete stale files under `.metadata/postgres/run/`.
+To avoid concurrent bootstraps, the local cluster startup grabs `.metadata/postgres/cluster.lock`; adjust the wait with `SONGBASE_DB_LOCK_TIMEOUT` (seconds).
 
 ```bash
 python backend/db/local_postgres.py ensure

@@ -36,6 +36,7 @@ from backend.processing.metadata_pipeline.pipeline import (
 )
 from backend.processing.storage_utils import song_cache_path
 from backend.processing.metadata_pipeline.id3_writer import write_id3_tags
+from backend.api.events.library_events import emit_library_event
 
 router = APIRouter()
 
@@ -756,6 +757,11 @@ def _start_metadata_task(
                 with _metadata_lock:
                     state["running"] = False
                     state["finished_at"] = _utc_now()
+                if task == "verification":
+                    emit_library_event(
+                        "song_metadata_updated",
+                        payload={"source": "metadata_verification"},
+                    )
 
         thread = threading.Thread(target=_worker, daemon=True)
         _metadata_threads[task] = thread
@@ -800,6 +806,11 @@ async def ingest_songs(payload: IngestRequest):
         model_name=payload.model_name,
         model_version=model_version,
         preprocess_version=preprocess_version,
+    )
+
+    emit_library_event(
+        "song_added",
+        payload={"count": counts["songs"], "source": "ingest"},
     )
 
     return {
@@ -1754,6 +1765,12 @@ async def update_song(sha_id: str, payload: SongUpdateRequest) -> dict[str, Any]
             )
         conn.commit()
 
+    emit_library_event(
+        "song_metadata_updated",
+        sha_id=sha_id,
+        payload={"fields": list(payload.model_fields_set)},
+    )
+
     detail = _fetch_song_detail(sha_id)
     if not detail:
         raise HTTPException(status_code=404, detail="Song not found.")
@@ -1831,6 +1848,11 @@ async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
                 updated += update_count
 
         conn.commit()
+
+    emit_library_event(
+        "song_metadata_updated",
+        payload={"sha_ids": payload.sha_ids, "album_id": payload.album_id},
+    )
 
     return {"linked": updated, "album_id": payload.album_id}
 
@@ -2647,6 +2669,10 @@ async def run_pipeline(payload: PipelineRunRequest) -> dict[str, Any]:
                 with _pipeline_lock:
                     _pipeline_state["running"] = False
                     _pipeline_state["finished_at"] = _utc_now()
+                emit_library_event(
+                    "library_changed",
+                    payload={"source": "pipeline", "error": _pipeline_state["last_error"]},
+                )
 
         _pipeline_thread = threading.Thread(target=_worker, daemon=True)
         _pipeline_thread.start()

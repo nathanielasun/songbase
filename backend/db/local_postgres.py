@@ -6,6 +6,8 @@ import os
 import shutil
 import subprocess
 import sys
+import time
+from contextlib import contextmanager
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -36,6 +38,21 @@ try:
     from backend import app_settings
 except ImportError:
     app_settings = None
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None
+
+try:
+    import msvcrt
+except ImportError:
+    msvcrt = None
+
+
+LOCK_TIMEOUT_SEC = float(os.environ.get("SONGBASE_DB_LOCK_TIMEOUT", "30"))
+LOCK_POLL_SEC = 0.25
+LOCK_FILE_NAME = "cluster.lock"
 
 
 def _metadata_root() -> Path:
@@ -114,6 +131,143 @@ def is_local_url(url: str | None) -> bool:
         return False
     host = Path(host_values[0]).expanduser()
     return host.resolve() == _run_dir().resolve()
+
+
+def _pid_is_running(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _read_postmaster_pid() -> tuple[int | None, int | None]:
+    pid_path = _data_dir() / "postmaster.pid"
+    if not pid_path.exists():
+        return None, None
+    try:
+        lines = pid_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None, None
+
+    pid = None
+    shared_memory_id = None
+    if lines:
+        try:
+            pid = int(lines[0].strip())
+        except ValueError:
+            pid = None
+    if len(lines) >= 7:
+        numbers: list[int] = []
+        for token in lines[6].split():
+            try:
+                numbers.append(int(token))
+            except ValueError:
+                continue
+        if numbers:
+            shared_memory_id = numbers[-1]
+
+    return pid, shared_memory_id
+
+
+def _cleanup_stale_runtime_files() -> None:
+    pid, shared_memory_id = _read_postmaster_pid()
+    if pid and _pid_is_running(pid):
+        return
+
+    for name in ("postmaster.pid", "postmaster.opts"):
+        path = _data_dir() / name
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
+
+    run_dir = _run_dir()
+    if run_dir.exists():
+        for entry in run_dir.glob(".s.PGSQL.*"):
+            try:
+                entry.unlink()
+            except OSError:
+                pass
+
+    if shared_memory_id is None:
+        return
+    ipcrm = shutil.which("ipcrm")
+    if not ipcrm:
+        return
+    subprocess.run(
+        [ipcrm, "-m", str(shared_memory_id)],
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _acquire_file_lock(handle, timeout_sec: float) -> None:
+    if fcntl:
+        start = time.time()
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except BlockingIOError:
+                if time.time() - start >= timeout_sec:
+                    raise RuntimeError("Timed out waiting for local Postgres bootstrap lock")
+                time.sleep(LOCK_POLL_SEC)
+    if msvcrt:
+        start = time.time()
+        try:
+            handle.seek(0)
+            handle.write("0")
+            handle.flush()
+            handle.seek(0)
+        except OSError:
+            pass
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.time() - start >= timeout_sec:
+                    raise RuntimeError("Timed out waiting for local Postgres bootstrap lock")
+                time.sleep(LOCK_POLL_SEC)
+
+
+def _release_file_lock(handle) -> None:
+    if fcntl:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except OSError:
+            pass
+    elif msvcrt:
+        try:
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        except OSError:
+            pass
+
+
+@contextmanager
+def _cluster_lock(timeout_sec: float = LOCK_TIMEOUT_SEC):
+    lock_path = _base_dir() / LOCK_FILE_NAME
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    handle = lock_path.open("a+", encoding="utf-8")
+    _acquire_file_lock(handle, timeout_sec)
+    try:
+        try:
+            handle.seek(0)
+            handle.truncate(0)
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+        except OSError:
+            pass
+        yield
+    finally:
+        _release_file_lock(handle)
+        handle.close()
 
 
 def _require_tool(name: str) -> str:
@@ -268,24 +422,30 @@ def init_cluster(initdb: str) -> bool:
 def start_cluster(pg_ctl: str) -> None:
     if _pg_ctl_status(pg_ctl):
         return
+    _cleanup_stale_runtime_files()
     run_dir = _run_dir()
     log_path = _log_path()
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path.parent.mkdir(parents=True, exist_ok=True)
     options = f"-k {run_dir} -p {_port()}"
-    _run(
-        [
-            pg_ctl,
-            "-D",
-            str(_data_dir()),
-            "-l",
-            str(log_path),
-            "-o",
-            options,
-            "-w",
-            "start",
-        ]
-    )
+    try:
+        _run(
+            [
+                pg_ctl,
+                "-D",
+                str(_data_dir()),
+                "-l",
+                str(log_path),
+                "-o",
+                options,
+                "-w",
+                "start",
+            ]
+        )
+    except subprocess.CalledProcessError:
+        if _pg_ctl_status(pg_ctl):
+            return
+        raise
 
 
 def stop_cluster(pg_ctl: str) -> None:
@@ -366,13 +526,14 @@ def ensure_cluster() -> None:
     createdb = _require_tool("createdb")
     psql = _require_tool("psql")
 
-    init_cluster(initdb)
-    start_cluster(pg_ctl)
-    _ensure_database(createdb, psql, _metadata_db())
-    _ensure_database(createdb, psql, _image_db())
-    if python_bootstrap:
-        python_bootstrap.ensure_python_deps()
-    _run_migrations()
+    with _cluster_lock():
+        init_cluster(initdb)
+        start_cluster(pg_ctl)
+        _ensure_database(createdb, psql, _metadata_db())
+        _ensure_database(createdb, psql, _image_db())
+        if python_bootstrap:
+            python_bootstrap.ensure_python_deps()
+        _run_migrations()
 
 
 def print_env() -> None:

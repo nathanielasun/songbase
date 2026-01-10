@@ -30,15 +30,18 @@ def main():
 
     metadata_url = os.environ.get("SONGBASE_DATABASE_URL")
     image_url = os.environ.get("SONGBASE_IMAGE_DATABASE_URL")
-    if (
+    skip_bootstrap = os.environ.get("SONGBASE_SKIP_DB_BOOTSTRAP") == "1"
+    needs_bootstrap = (
         not metadata_url
         or not image_url
         or local_postgres.is_local_url(metadata_url)
         or local_postgres.is_local_url(image_url)
-    ):
+    )
+    if needs_bootstrap and not (skip_bootstrap and metadata_url and image_url):
         local_postgres.ensure_cluster()
         os.environ["SONGBASE_DATABASE_URL"] = local_postgres.metadata_url()
         os.environ["SONGBASE_IMAGE_DATABASE_URL"] = local_postgres.image_url()
+        os.environ["SONGBASE_SKIP_DB_BOOTSTRAP"] = "1"
 
     import uvicorn
 

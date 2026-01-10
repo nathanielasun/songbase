@@ -17,6 +17,7 @@ if [ -z "${SONGBASE_DATABASE_URL:-}" ] || [ -z "${SONGBASE_IMAGE_DATABASE_URL:-}
   "${PY_RUN}" -m backend.db.local_postgres ensure
   eval "$("${PY_RUN}" -m backend.db.local_postgres env)"
 fi
+export SONGBASE_SKIP_DB_BOOTSTRAP=1
 
 # Start backend API server
 echo "Starting FastAPI backend on http://localhost:8000"

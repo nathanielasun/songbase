@@ -33,7 +33,9 @@ interface TopSong {
   sha_id: string;
   title: string;
   artist: string;
+  artist_id: number | null;
   album: string | null;
+  duration_sec: number;
   play_count: number;
   total_duration_ms: number;
   avg_completion: number;
@@ -52,6 +54,7 @@ interface HistoryItem {
   sha_id: string;
   title: string;
   artist: string;
+  artist_id: number | null;
   album: string | null;
   started_at: string;
   duration_played_ms: number;
@@ -96,15 +99,16 @@ function TopSongsChart({ songs }: { songs: TopSong[] }) {
   const { playSong } = useMusicPlayer();
   const maxPlays = songs.length > 0 ? songs[0].play_count : 1;
 
-  const handlePlay = (song: TopSong) => {
+  const handlePlay = (song: TopSong, e: React.MouseEvent) => {
+    e.stopPropagation();
     playSong({
       id: song.sha_id,
       hashId: song.sha_id,
       title: song.title,
       artist: song.artist,
       album: song.album || '',
-      duration: Math.floor(song.total_duration_ms / song.play_count / 1000),
-      albumArt: `/api/library/songs/${song.sha_id}/image`,
+      duration: song.duration_sec || Math.floor(song.total_duration_ms / song.play_count / 1000),
+      albumArt: `/api/library/images/song/${song.sha_id}`,
     });
   };
 
@@ -119,17 +123,45 @@ function TopSongsChart({ songs }: { songs: TopSong[] }) {
           <p className="text-gray-500 text-sm">No play history yet</p>
         ) : (
           songs.map((song, i) => (
-            <div key={song.sha_id} className="flex items-center gap-3">
+            <div key={song.sha_id} className="flex items-center gap-3 group">
               <span className="text-gray-500 w-5 text-sm">{i + 1}</span>
-              <button
-                onClick={() => handlePlay(song)}
-                className="p-1.5 rounded-full bg-gray-800 hover:bg-pink-600 transition-colors"
-              >
-                <PlayIcon className="w-3 h-3" />
-              </button>
+              <div className="relative flex-shrink-0">
+                <img
+                  src={`/api/library/images/song/${song.sha_id}`}
+                  alt=""
+                  className="w-10 h-10 rounded bg-gray-800 object-cover"
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = '/default-album.svg';
+                  }}
+                />
+                <button
+                  onClick={(e) => handlePlay(song, e)}
+                  className="absolute inset-0 flex items-center justify-center bg-black/60 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                >
+                  <PlayIcon className="w-5 h-5 text-white" />
+                </button>
+              </div>
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{song.title}</div>
-                <div className="text-xs text-gray-400 truncate">{song.artist}</div>
+                <div className="text-xs text-gray-400 truncate">
+                  {song.artist_id ? (
+                    <Link
+                      href={`/artist/${song.artist_id}`}
+                      className="hover:text-white hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {song.artist}
+                    </Link>
+                  ) : (
+                    song.artist
+                  )}
+                  {song.album && (
+                    <>
+                      <span className="mx-1">·</span>
+                      <span className="text-gray-500">{song.album}</span>
+                    </>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 <div
@@ -166,6 +198,14 @@ function TopArtistsChart({ artists }: { artists: TopArtist[] }) {
               className="flex items-center gap-3 hover:bg-gray-800/50 rounded-lg p-1 -m-1 transition-colors"
             >
               <span className="text-gray-500 w-5 text-sm">{i + 1}</span>
+              <img
+                src={`/api/library/images/artist/${artist.artist_id}`}
+                alt=""
+                className="w-10 h-10 rounded-full bg-gray-800 object-cover flex-shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/default-album.svg';
+                }}
+              />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{artist.name}</div>
                 <div className="text-xs text-gray-400">{artist.unique_songs} songs</div>
@@ -289,15 +329,35 @@ function RecentHistory({ items }: { items: HistoryItem[] }) {
           items.slice(0, 10).map((item) => (
             <div key={item.session_id} className="flex items-center gap-3">
               <img
-                src={`/api/library/songs/${item.sha_id}/image`}
+                src={`/api/library/images/song/${item.sha_id}`}
                 alt=""
-                className="w-10 h-10 rounded bg-gray-800 object-cover"
+                className="w-10 h-10 rounded bg-gray-800 object-cover flex-shrink-0"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = '/default-album.svg';
+                }}
               />
               <div className="flex-1 min-w-0">
                 <div className="text-sm font-medium truncate">{item.title}</div>
-                <div className="text-xs text-gray-400 truncate">{item.artist}</div>
+                <div className="text-xs text-gray-400 truncate">
+                  {item.artist_id ? (
+                    <Link
+                      href={`/artist/${item.artist_id}`}
+                      className="hover:text-white hover:underline"
+                    >
+                      {item.artist}
+                    </Link>
+                  ) : (
+                    item.artist
+                  )}
+                  {item.album && (
+                    <>
+                      <span className="mx-1">·</span>
+                      <span className="text-gray-500">{item.album}</span>
+                    </>
+                  )}
+                </div>
               </div>
-              <div className="text-right">
+              <div className="text-right flex-shrink-0">
                 <div className="text-xs text-gray-500">{formatTimeAgo(item.started_at)}</div>
                 {item.skipped && <div className="text-xs text-red-400">skipped</div>}
                 {item.completed && <div className="text-xs text-green-400">completed</div>}
