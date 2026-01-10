@@ -114,8 +114,21 @@ async def analyze_stream(
     _analysis_stop_requested = False
 
     async def generate():
-        from backend.processing.feature_pipeline.db import process_batch
+        from backend.processing.feature_pipeline.db import process_batch, get_songs_needing_analysis
         from backend.processing.feature_pipeline.config import FeatureConfig
+
+        # Send initial connection event
+        yield f"data: {json.dumps({'type': 'connected', 'message': 'Stream connected'})}\n\n"
+
+        # Get count of songs to process first
+        songs = await get_songs_needing_analysis(limit=limit, force=force)
+        total_songs = len(songs)
+
+        yield f"data: {json.dumps({'type': 'started', 'total': total_songs, 'message': f'Starting analysis of {total_songs} songs'})}\n\n"
+
+        if total_songs == 0:
+            yield f"data: {json.dumps({'type': 'complete', 'processed': 0, 'failed': 0, 'skipped': 0, 'stopped': False})}\n\n"
+            return
 
         progress_queue = asyncio.Queue()
 
@@ -185,7 +198,15 @@ async def analyze_stream(
             logger.error(f"Analysis stream error: {e}")
             yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
 
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # Disable nginx buffering
+        },
+    )
 
 
 @router.post("/analyze/stop")

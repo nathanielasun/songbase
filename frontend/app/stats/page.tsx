@@ -123,7 +123,7 @@ function TopSongsChart({ songs }: { songs: TopSong[] }) {
           <p className="text-gray-500 text-sm">No play history yet</p>
         ) : (
           songs.map((song, i) => (
-            <div key={song.sha_id} className="flex items-center gap-3 group">
+            <div key={`${song.sha_id}-${i}`} className="flex items-center gap-3 group">
               <span className="text-gray-500 w-5 text-sm">{i + 1}</span>
               <div className="relative flex-shrink-0">
                 <img

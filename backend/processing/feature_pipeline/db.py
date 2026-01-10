@@ -281,11 +281,13 @@ async def process_batch(
                 })
             continue
 
-        # Extract features
+        # Extract features - run in thread pool to avoid blocking event loop
         start_time = time.time()
 
         try:
-            features = pipeline.extract_from_file(audio_path)
+            # Run blocking extraction in a thread pool
+            import asyncio
+            features = await asyncio.to_thread(pipeline.extract_from_file, audio_path)
             analysis_duration_ms = int((time.time() - start_time) * 1000)
 
             # Save to database

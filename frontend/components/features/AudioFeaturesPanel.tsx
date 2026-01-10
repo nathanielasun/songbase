@@ -37,7 +37,9 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
 
   // Analysis state
   const [analyzing, setAnalyzing] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<string | null>(null);
   const [progress, setProgress] = useState<AnalysisProgress | null>(null);
+  const [totalToAnalyze, setTotalToAnalyze] = useState<number>(0);
   const [analysisResults, setAnalysisResults] = useState<{
     processed: number;
     failed: number;
@@ -71,6 +73,8 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
     setProgress(null);
     setAnalysisResults(null);
     setError(null);
+    setConnectionStatus('Connecting...');
+    setTotalToAnalyze(0);
 
     try {
       const url = new URL(`${SSE_BACKEND_URL}/api/features/analyze/stream`);
@@ -83,7 +87,16 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
         try {
           const data = JSON.parse(event.data);
 
-          if (data.type === 'progress') {
+          if (data.type === 'connected') {
+            setConnectionStatus('Connected, preparing...');
+          } else if (data.type === 'started') {
+            setConnectionStatus(null);
+            setTotalToAnalyze(data.total);
+          } else if (data.type === 'heartbeat') {
+            // Heartbeat received - connection is alive
+            // No UI update needed, but we could add a subtle indicator
+          } else if (data.type === 'progress') {
+            setConnectionStatus(null);
             setProgress({
               current: data.current,
               total: data.total,
@@ -94,6 +107,7 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
               duration_ms: data.duration_ms,
             });
           } else if (data.type === 'complete') {
+            setConnectionStatus(null);
             setAnalysisResults({
               processed: data.processed,
               failed: data.failed,
@@ -103,9 +117,15 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
             eventSource.close();
             fetchStats(); // Refresh stats
           } else if (data.type === 'error') {
+            setConnectionStatus(null);
             setError(data.message);
             setAnalyzing(false);
             eventSource.close();
+          } else if (data.type === 'cancelled') {
+            setConnectionStatus(null);
+            setAnalyzing(false);
+            eventSource.close();
+            fetchStats();
           }
         } catch (e) {
           console.error('Failed to parse SSE data:', e);
@@ -113,12 +133,14 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
       };
 
       eventSource.onerror = () => {
-        setError('Connection lost');
+        setConnectionStatus(null);
+        setError('Connection lost - the analysis may still be running in the background');
         setAnalyzing(false);
         eventSource.close();
       };
 
     } catch (e) {
+      setConnectionStatus(null);
       setError(e instanceof Error ? e.message : 'Failed to start analysis');
       setAnalyzing(false);
     }
@@ -268,6 +290,13 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
               </div>
             ) : (
               <div className="space-y-3">
+                {/* Connection status */}
+                {connectionStatus && (
+                  <div className="bg-blue-900/30 border border-blue-800 rounded-lg p-3 flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-blue-300 text-sm">{connectionStatus}</span>
+                  </div>
+                )}
                 {/* Current progress */}
                 {progress && (
                   <div className="bg-gray-800/50 rounded-lg p-3">
@@ -300,6 +329,22 @@ export function AudioFeaturesPanel({ isCollapsed = false, onToggle }: AudioFeatu
                         </span>
                       )}
                     </div>
+                    {/* Processing indicator - shows when waiting for next song */}
+                    {progress.current < progress.total && (
+                      <div className="flex items-center gap-2 mt-2 text-xs text-gray-500">
+                        <div className="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin" />
+                        <span>Analyzing next song...</span>
+                      </div>
+                    )}
+                  </div>
+                )}
+                {/* Show waiting state if analyzing but no progress yet */}
+                {!progress && !connectionStatus && totalToAnalyze > 0 && (
+                  <div className="bg-gray-800/50 rounded-lg p-3 flex items-center gap-2">
+                    <div className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />
+                    <span className="text-gray-300 text-sm">
+                      Starting analysis of {totalToAnalyze} songs...
+                    </span>
                   </div>
                 )}
                 <button

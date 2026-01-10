@@ -8,6 +8,7 @@ resampy==0.4.3
 tensorflow>=2.16.0,<2.18.0  # Pinned for tensorflow-metal compatibility on Apple Silicon
 tf-slim==1.1.0
 psycopg[binary]==3.2.3
+psycopg_pool==3.2.4
 pgvector==0.3.6
 musicbrainzngs==0.7.1
 yt-dlp==2025.2.19

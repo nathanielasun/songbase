@@ -5,6 +5,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists, features
 from backend.processing import dependencies
 from backend.db import local_postgres
+from backend.db import connection as db_connection
+from backend.db import image_connection as db_image_connection
 
 app = FastAPI(
     title="Songbase API",
@@ -58,10 +60,33 @@ async def start_background_services() -> None:
     scheduler = get_playlist_refresh_scheduler()
     scheduler.start()
 
+@app.on_event("shutdown")
+async def shutdown_connection_pools() -> None:
+    """Close database connection pools on shutdown."""
+    db_connection.close_pool()
+    db_image_connection.close_pool()
+
+
 @app.get("/")
 async def root():
     return {"message": "Songbase API", "version": "1.0.0"}
 
+
 @app.get("/health")
 async def health():
-    return {"status": "healthy"}
+    """Health check with connection pool stats."""
+    try:
+        metadata_pool = db_connection.get_pool_stats()
+        image_pool = db_image_connection.get_pool_stats()
+        return {
+            "status": "healthy",
+            "pools": {
+                "metadata": metadata_pool,
+                "images": image_pool,
+            },
+        }
+    except Exception as e:
+        return {
+            "status": "degraded",
+            "error": str(e),
+        }
