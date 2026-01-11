@@ -344,7 +344,13 @@ def _download_file(
                     f"Actual:   {actual}"
                 )
 
-        if zipfile.is_zipfile(temp_path) or tarfile.is_tarfile(temp_path):
+        # Check if this is an archive we should extract from.
+        # Note: .npz files are technically zip files (NumPy's format), but they
+        # should be treated as regular files, not archives to extract from.
+        is_archive = zipfile.is_zipfile(temp_path) or tarfile.is_tarfile(temp_path)
+        is_npz = dest_path.suffix.lower() == ".npz"
+
+        if is_archive and not is_npz:
             if extract_all:
                 target_dir = dest_path if dest_path.is_dir() else dest_path.parent
                 _extract_archive_all(temp_path, target_dir, archive_root)
