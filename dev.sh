@@ -84,9 +84,20 @@ echo "Starting FastAPI backend on http://localhost:8000"
 "${PY_RUN}" -m backend.api.server --reload --port 8000 &
 BACKEND_PID=$!
 
+# Install frontend dependencies if needed
+cd frontend
+if [ ! -d "node_modules" ]; then
+  echo "Frontend dependencies not found. Running npm install..."
+  npm install
+  echo "Frontend dependencies installed."
+elif [ "package.json" -nt "node_modules" ] || [ "package-lock.json" -nt "node_modules" ]; then
+  echo "Frontend dependencies may be outdated. Running npm install..."
+  npm install
+  echo "Frontend dependencies updated."
+fi
+
 # Start frontend Next.js server
 echo "Starting Next.js frontend on http://localhost:3000"
-cd frontend
 npm run dev &
 FRONTEND_PID=$!
 
