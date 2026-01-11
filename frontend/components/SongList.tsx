@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation';
 import { PlayIcon, PlusIcon, PauseIcon, ArrowDownTrayIcon, QueueListIcon, XMarkIcon, HeartIcon } from '@heroicons/react/24/solid';
 import { RadioIcon, HeartIcon as HeartOutlineIcon } from '@heroicons/react/24/outline';
 import { Song } from '@/lib/types';
-import { formatDuration } from '@/lib/mockData';
+import { formatDuration } from '@/lib/utils';
 import { useUserPreferences } from '@/contexts/UserPreferencesContext';
 import ArtistLinks from '@/components/ArtistLinks';
 

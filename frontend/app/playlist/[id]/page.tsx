@@ -5,7 +5,7 @@ import { useParams, useRouter } from 'next/navigation';
 import Image from 'next/image';
 import Link from 'next/link';
 import { ArrowLeftIcon, PlayIcon, PencilIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
-import { formatDate, getTotalDuration } from '@/lib/mockData';
+import { formatDate, getTotalDuration } from '@/lib/utils';
 import { Song } from '@/lib/types';
 import SongList from '@/components/SongList';
 import EditPlaylistModal from '@/components/EditPlaylistModal';

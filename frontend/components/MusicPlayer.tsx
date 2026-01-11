@@ -21,7 +21,7 @@ import {
   HandThumbDownIcon as HandThumbDownOutlineIcon,
 } from '@heroicons/react/24/outline';
 import { Song, RepeatMode } from '@/lib/types';
-import { formatDuration } from '@/lib/mockData';
+import { formatDuration } from '@/lib/utils';
 import ArtistLinks from '@/components/ArtistLinks';
 
 interface MusicPlayerProps {

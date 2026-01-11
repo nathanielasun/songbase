@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { XMarkIcon, ChevronRightIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { useMusicPlayer } from '@/contexts/MusicPlayerContext';
-import { formatDuration } from '@/lib/mockData';
+import { formatDuration } from '@/lib/utils';
 
 interface QueueProps {
   isOpen: boolean;
