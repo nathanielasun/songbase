@@ -88,10 +88,14 @@ BACKEND_PID=$!
 cd frontend
 if [ ! -d "node_modules" ]; then
   echo "Frontend dependencies not found. Running npm install..."
+  # Clear any stale Next.js cache from previous installs
+  rm -rf .next
   npm install
   echo "Frontend dependencies installed."
 elif [ "package.json" -nt "node_modules" ] || [ "package-lock.json" -nt "node_modules" ]; then
   echo "Frontend dependencies may be outdated. Running npm install..."
+  # Clear Next.js cache to avoid stale module resolution
+  rm -rf .next
   npm install
   echo "Frontend dependencies updated."
 fi
