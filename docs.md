@@ -116,15 +116,14 @@ songbase/
 │       │       └── aggregation.py - Result aggregation
 │       ├── acquisition_pipeline/
 │       │   ├── __init__.py      - Package entry point for acquisition helpers
-│       │   ├── cli.py           - CLI for song acquisition (yt-dlp)
+│       │   ├── cli.py           - CLI for song acquisition
 │       │   ├── config.py        - Acquisition settings + cache paths
 │       │   ├── db.py            - Download queue DB helpers
 │       │   ├── discovery.py     - Song list discovery + sources.jsonl writer
 │       │   ├── discovery_providers.py - External discovery routines (MusicBrainz, hotlists)
-│       │   ├── downloader.py    - yt-dlp download worker
 │       │   ├── io.py            - Metadata JSON writer
 │       │   ├── importer.py      - Local file import into the queue
-│       │   ├── pipeline.py      - Parallel download orchestration
+│       │   ├── pipeline.py      - Pipeline orchestration
 │       │   └── sources.py       - Extendable song source list reader
 │       ├── metadata_pipeline/
 │       │   ├── __init__.py       - Package entry point for verification helpers
@@ -208,13 +207,12 @@ songbase/
 
 ### frontend/app/library/page.tsx
 - **Purpose**: Library management UI for queueing songs, monitoring pipeline status, and viewing stats.
-- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/acquisition/backends`, `/api/settings/vggish`
+- **Uses**: `/api/library/queue`, `/api/library/queue/clear`, `/api/library/import`, `/api/library/stats`, `/api/library/pipeline/status`, `/api/settings/vggish`
 - **Notes**: The pipeline queue table is paged (10/25/50/100).
 - **Notes**: The pipeline run panel shows live config, last event, and cache paths while running.
 - **Notes**: "Run until queue is empty" checkbox automatically processes batches until all pending and processing items are stored or failed.
-- **Notes**: Acquisition backend panel allows configuring yt-dlp authentication with browser cookies for accessing age-restricted or member-only content.
 - **Notes**: Manage Music includes local file import (audio/video) via `/api/library/import`.
-- **Notes**: Database tab includes a song metadata editor with a right-side details panel, edit flow, and per-song metadata verification buttons.
+- **Notes**: Database tab includes a song metadata editor with a right-side details panel, edit flow, per-song metadata verification buttons, and song deletion with optional file removal.
 - **Notes**: Database tab includes a VGGish Embeddings panel for configuring embedding parameters (sample rate, mel spectrogram settings, device preference) and recalculating embeddings with live progress.
 
 ### frontend/app/settings/page.tsx
@@ -722,6 +720,7 @@ try {
   - `GET /api/library/songs/unlinked`: List songs missing album or artist metadata
   - `GET /api/library/songs/{sha_id}`: Fetch song metadata + relations
   - `PUT /api/library/songs/{sha_id}`: Update song metadata (title, artist, album, genre, release year, track number)
+  - `DELETE /api/library/songs/{sha_id}`: Delete a song and all associated data (metadata, associations, features, embeddings, play history, smart playlist memberships, images). Optional `delete_file=true` query param to also delete the audio file from disk.
   - `POST /api/library/songs/{sha_id}/verify`: Re-run metadata verification for a single song
   - `POST /api/library/songs/link`: Attach songs to an existing album record
   - `GET /api/library/albums`: List cached album metadata
@@ -771,28 +770,6 @@ try {
   curl -X POST http://localhost:8000/api/library/playlist/enhanced-for-you \
     -H "Content-Type: application/json" \
     -d '{"liked_song_ids":["sha_id_1"],"disliked_song_ids":[],"limit":50,"use_play_history":true,"history_days":30}'
-  ```
-
-### backend/api/routes/acquisition.py
-- **Purpose**: Manage acquisition backend configuration and authentication
-- **Endpoints**:
-  - `GET /api/acquisition/backends`: Get all configured acquisition backends
-  - `POST /api/acquisition/backends/{backend_id}`: Update or create a backend configuration
-  - `POST /api/acquisition/backends/{backend_id}/set-active`: Set the active acquisition backend
-  - `DELETE /api/acquisition/backends/{backend_id}`: Delete a backend configuration
-  - `POST /api/acquisition/backends/{backend_id}/test`: Test backend configuration and authentication
-- **Usage**:
-  ```bash
-  # Get current backends
-  curl http://localhost:8000/api/acquisition/backends
-
-  # Update yt-dlp backend with cookies
-  curl -X POST http://localhost:8000/api/acquisition/backends/yt-dlp \
-    -H "Content-Type: application/json" \
-    -d '{"backend_type":"yt-dlp","enabled":true,"auth_method":"cookies","cookies_file":"~/.config/yt-dlp/cookies.txt"}'
-
-  # Test backend
-  curl -X POST http://localhost:8000/api/acquisition/backends/yt-dlp/test
   ```
 
 ### backend/api/routes/settings.py
@@ -1786,44 +1763,28 @@ If the wrapper selects an unsupported Python version, set `PYTHON_BIN=python3.12
   ```
 
 ### backend/processing/acquisition_pipeline/
-- **Purpose**: Download pending songs into `preprocessed_cache/` using yt-dlp
+- **Purpose**: Manage song acquisition from local files and queue processing
 - **Key Modules**:
   - `cli.py`: Command-line interface for acquisition
-  - `config.py`: Cache locations + yt-dlp settings
-    - **Dynamic cookies loading**: Checks stored acquisition settings first, then falls back to `SONGBASE_YTDLP_COOKIES_FILE` environment variable
-    - **Backend authentication**: Supports browser cookie files for yt-dlp authentication
-    - **Format selection preferences**: `YTDLP_PREFER_AUDIO_ONLY` (default: `True`), `YTDLP_MAX_AUDIO_QUALITY` (default: `256` kbps)
-    - **Player client configuration**: `YTDLP_PLAYER_CLIENTS` (default: `default,android,ios,web,mediaconnect`)
+  - `config.py`: Cache locations and discovery settings
   - `db.py`: Download queue helpers (reads `metadata.download_queue`)
     - **Automatic cleanup**: Songs are automatically removed from the queue when they reach "stored" or "duplicate" status to prevent duplication
-  - `downloader.py`: yt-dlp download worker
-    - **Intelligent format selection**: Queries available formats first, then selects the best one
-    - **Audio-only preference**: Prefers audio-only formats over video+audio to save bandwidth and conversion time
-    - **Quality-aware**: Sorts by audio bitrate (up to max quality) and filesize
-    - **Player client fallback**: When signature extraction fails, tries multiple YouTube player clients (android, ios, web, mediaconnect)
-    - **Automatic fallback**: Falls back to flexible format string if no specific format can be selected
-    - **Format detection**: Detects if downloaded file needs audio conversion (videos, non-MP3 audio)
-  - `discovery.py`: Song list discovery + sources.jsonl writer (no downloads)
+  - `discovery.py`: Song list discovery + sources.jsonl writer
   - `discovery_providers.py`: External discovery routines (MusicBrainz, hotlists)
   - `io.py`: Writes JSON metadata sidecars
-  - `pipeline.py`: Parallel download orchestration
+  - `importer.py`: Local file import into the queue
+  - `pipeline.py`: Pipeline orchestration
   - `sources.py`: Extendable JSONL song list ingestion
   - `sources.jsonl`: Default song source list
+- **Note**: External downloading has been removed. Use local file import via the Manage Library UI.
 
 ### backend/processing/acquisition_pipeline/cli.py
-- **Purpose**: Seed the download queue and fetch MP3s in parallel
-- **Requires**: `SONGBASE_DATABASE_URL` set, plus yt-dlp (and ffmpeg)
-- **Usage**:
-  ```bash
-  SONGBASE_DATABASE_URL=postgres://... python backend/processing/acquisition_pipeline/cli.py --workers 4
-  ```
+- **Purpose**: Seed the download queue from sources file
+- **Requires**: `SONGBASE_DATABASE_URL` set
 - **Sources File Format** (`backend/processing/acquisition_pipeline/sources.jsonl`):
   ```json
   {"title": "Example Song", "artist": "Example Artist", "search_query": "Example Artist - Example Song"}
   ```
-- **Output**:
-  - MP3s written to `preprocessed_cache/`
-  - JSON metadata sidecar per MP3 (same filename, `.json` extension)
 
 ### backend/processing/acquisition_pipeline/discovery.py
 - **Purpose**: Discover new song lists (genre similarity, same artist/album, hotlists) and append to `sources.jsonl`

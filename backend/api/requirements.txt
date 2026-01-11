@@ -11,7 +11,6 @@ psycopg[binary]==3.2.3
 psycopg_pool==3.2.4
 pgvector==0.3.6
 musicbrainzngs==0.7.1
-yt-dlp==2025.2.19
 
 # Audio feature extraction (BPM, key, energy, mood)
 librosa>=0.10.0

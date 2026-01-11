@@ -2,7 +2,7 @@ import os
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from backend.api.routes import processing, library, settings, acquisition, playback, stats, stats_stream, export, smart_playlists, features
+from backend.api.routes import processing, library, settings, playback, stats, stats_stream, export, smart_playlists, features
 from backend.processing import dependencies
 from backend.db import local_postgres
 from backend.db import connection as db_connection
@@ -25,7 +25,6 @@ app.add_middleware(
 app.include_router(processing.router, prefix="/api/processing", tags=["processing"])
 app.include_router(library.router, prefix="/api/library", tags=["library"])
 app.include_router(settings.router, prefix="/api/settings", tags=["settings"])
-app.include_router(acquisition.router, prefix="/api/acquisition", tags=["acquisition"])
 app.include_router(playback.router, prefix="/api/play", tags=["playback"])
 app.include_router(stats.router, prefix="/api/stats", tags=["stats"])
 app.include_router(stats_stream.router, prefix="/api/stats/stream", tags=["stats-stream"])

@@ -30,7 +30,6 @@ REQUIRED_MODULES = (
     "psycopg",
     "pgvector",
     "musicbrainzngs",
-    "yt_dlp",
     "numpy",
     "mutagen",
     "resampy",

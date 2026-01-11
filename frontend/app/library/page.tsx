@@ -7,12 +7,14 @@ import {
   ArrowPathIcon,
   ArrowUpTrayIcon,
   ChartBarIcon,
+  ExclamationTriangleIcon,
   InformationCircleIcon,
   MagnifyingGlassIcon,
   PencilSquareIcon,
   QueueListIcon,
   ChevronDownIcon,
   ChevronUpIcon,
+  TrashIcon,
   XMarkIcon,
 } from '@heroicons/react/24/outline';
 import { PlayIcon } from '@heroicons/react/24/solid';
@@ -145,19 +147,6 @@ type SongEditForm = {
   trackNumber: string;
 };
 
-type AcquisitionBackend = {
-  backend_type: string;
-  enabled: boolean;
-  auth_method?: string | null;
-  cookies_file?: string | null;
-  username?: string | null;
-};
-
-type AcquisitionSettings = {
-  active_backend: string;
-  backends: Record<string, AcquisitionBackend>;
-};
-
 type VggishConfig = {
   target_sample_rate: number;
   frame_sec: number;
@@ -273,15 +262,13 @@ export default function LibraryPage() {
   const [songSaveMessage, setSongSaveMessage] = useState<string | null>(null);
   const [songSaveError, setSongSaveError] = useState<string | null>(null);
   const [songVerifyBusy, setSongVerifyBusy] = useState<Record<string, boolean>>({});
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleteFile, setDeleteFile] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const [isQueueCollapsed, setIsQueueCollapsed] = useState(true);
-  const [isBackendCollapsed, setIsBackendCollapsed] = useState(true);
   const [isPipelineCollapsed, setIsPipelineCollapsed] = useState(false);
   const [isRecentActivityCollapsed, setIsRecentActivityCollapsed] = useState(true);
-
-  const [acquisitionSettings, setAcquisitionSettings] = useState<AcquisitionSettings | null>(null);
-  const [backendCookiesFile, setBackendCookiesFile] = useState('');
-  const [backendTestResult, setBackendTestResult] = useState<string | null>(null);
-  const [backendBusy, setBackendBusy] = useState(false);
 
   const [searchTitle, setSearchTitle] = useState('');
   const [searchArtist, setSearchArtist] = useState('');
@@ -570,67 +557,6 @@ export default function LibraryPage() {
     }
   }, [catalogOffset, catalogPageSize, catalogQuery]);
 
-  const refreshAcquisitionSettings = useCallback(async () => {
-    try {
-      const data = await fetchJson<AcquisitionSettings>('/api/acquisition/backends');
-      setAcquisitionSettings(data);
-      const activeBackend = data.backends[data.active_backend];
-      if (activeBackend?.cookies_file) {
-        setBackendCookiesFile(activeBackend.cookies_file);
-      }
-    } catch (error) {
-      console.error('Failed to load acquisition settings:', error);
-    }
-  }, []);
-
-  const updateAcquisitionBackend = async (backendId: string, cookiesFile: string) => {
-    setBackendBusy(true);
-    setBackendTestResult(null);
-    try {
-      const backend: AcquisitionBackend = {
-        backend_type: backendId,
-        enabled: true,
-        auth_method: cookiesFile ? 'cookies' : null,
-        cookies_file: cookiesFile || null,
-      };
-      await fetchJson(`/api/acquisition/backends/${backendId}`, {
-        method: 'POST',
-        body: JSON.stringify(backend),
-      });
-      await refreshAcquisitionSettings();
-      setBackendTestResult('Backend updated successfully');
-    } catch (error) {
-      setBackendTestResult(
-        error instanceof Error ? error.message : 'Failed to update backend'
-      );
-    } finally {
-      setBackendBusy(false);
-    }
-  };
-
-  const testAcquisitionBackend = async (backendId: string) => {
-    setBackendBusy(true);
-    setBackendTestResult(null);
-    try {
-      const result = await fetchJson<{ status: string; message: string; authenticated?: boolean }>(
-        `/api/acquisition/backends/${backendId}/test`,
-        { method: 'POST' }
-      );
-      if (result.status === 'success') {
-        const authStatus = result.authenticated ? ' (authenticated)' : ' (not authenticated)';
-        setBackendTestResult(`✓ ${result.message}${authStatus}`);
-      } else {
-        setBackendTestResult(`✗ ${result.message}`);
-      }
-    } catch (error) {
-      setBackendTestResult(
-        error instanceof Error ? error.message : 'Failed to test backend'
-      );
-    } finally {
-      setBackendBusy(false);
-    }
-  };
-
   const buildSongEditForm = useCallback(
     (detail: SongDetail): SongEditForm => ({
       title: detail.title ?? '',
@@ -647,9 +573,8 @@ export default function LibraryPage() {
     refreshStats();
     refreshPipeline();
     refreshSettings();
-    refreshAcquisitionSettings();
     refreshVggishSettings();
-  }, [refreshPipeline, refreshSettings, refreshStats, refreshAcquisitionSettings, refreshVggishSettings]);
+  }, [refreshPipeline, refreshSettings, refreshStats, refreshVggishSettings]);
 
   useEffect(() => {
     refreshQueue();
@@ -1016,6 +941,49 @@ export default function LibraryPage() {
     }
   };
 
+  const handleDeleteClick = () => {
+    setDeleteError(null);
+    setDeleteFile(false);
+    setShowDeleteModal(true);
+  };
+
+  const handleDeleteCancel = () => {
+    setShowDeleteModal(false);
+    setDeleteError(null);
+    setDeleteFile(false);
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!selectedSongId) {
+      return;
+    }
+    setDeleteBusy(true);
+    setDeleteError(null);
+    try {
+      const url = `/api/library/songs/${selectedSongId}${deleteFile ? '?delete_file=true' : ''}`;
+      await fetchJson(url, { method: 'DELETE' });
+
+      // Close modal and clear selection
+      setShowDeleteModal(false);
+      setSelectedSongId(null);
+      setSongDetail(null);
+      setSongEditMode(false);
+      setSongSaveMessage(null);
+      setSongSaveError(null);
+
+      // Remove from catalog items
+      setCatalogItems((prev) => prev.filter((item) => item.sha_id !== selectedSongId));
+      setCatalogTotal((prev) => Math.max(0, prev - 1));
+
+      // Refresh stats
+      refreshStats();
+    } catch (error) {
+      setDeleteError(error instanceof Error ? error.message : 'Failed to delete song.');
+    } finally {
+      setDeleteBusy(false);
+    }
+  };
+
   const handleVerifySong = async (shaId: string, title?: string | null) => {
     setActionMessage(null);
     setActionError(null);
@@ -1041,9 +1009,22 @@ export default function LibraryPage() {
         method: 'POST',
         body: JSON.stringify(payload),
       });
-      setActionMessage(`Verification started for ${title || 'song'}.`);
+      setActionMessage(`Verification completed for ${title || 'song'}.`);
       await refreshMetadataStatus();
       setCurrentVerificationStatus(null);
+
+      // Refresh catalog to update verification status in the list
+      await refreshCatalog();
+
+      // If this song is currently selected, refetch its details
+      if (selectedSongId === shaId) {
+        const updatedDetail = await fetchJson<SongDetail>(`/api/library/songs/${shaId}`);
+        setSongDetail(updatedDetail);
+        setSongEditForm(buildSongEditForm(updatedDetail));
+      }
+
+      // Also refresh stats since verification counts may have changed
+      refreshStats();
     } catch (error) {
       setActionError(
         error instanceof Error ? error.message : 'Failed to start verification.'
@@ -1879,127 +1860,6 @@ export default function LibraryPage() {
 
             {activeTab === 'downloads' && (
               <div className="space-y-6">
-                {/* Acquisition Backend Configuration */}
-                <CollapsiblePanel
-                  title="Acquisition Backend"
-                  icon={<ArrowDownTrayIcon className="h-5 w-5 text-gray-300" />}
-                  isCollapsed={isBackendCollapsed}
-                  onToggle={() => setIsBackendCollapsed(!isBackendCollapsed)}
-                >
-                  {acquisitionSettings && (
-                    <div className="space-y-4 text-sm text-gray-300">
-                      <div>
-                        <p className="mb-3 text-gray-400">
-                          Configure authentication for music acquisition. yt-dlp supports browser cookies for downloading age-restricted or member-only content.
-                        </p>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div>
-                          <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Active Backend
-                          </label>
-                          <div className="text-sm">
-                            <span className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-medium">
-                              {acquisitionSettings.active_backend}
-                            </span>
-                          </div>
-                        </div>
-
-                        <div>
-                          <label className="block text-sm font-medium text-gray-300 mb-2">
-                            Cookies File Path
-                          </label>
-                          <input
-                            type="text"
-                            value={backendCookiesFile}
-                            onChange={(e) => setBackendCookiesFile(e.target.value)}
-                            placeholder="~/.config/yt-dlp/cookies.txt"
-                            className="w-full rounded-xl bg-gray-800 px-4 py-3 text-sm text-white focus:outline-none focus:ring-2 focus:ring-white/40"
-                          />
-                          <p className="mt-2 text-xs text-gray-500">
-                            Export browser cookies using an extension like "Get cookies.txt LOCALLY" (Chrome/Firefox).
-                            Cookies enable access to age-restricted content and authenticated downloads.
-                          </p>
-                          <div className="mt-2 p-2 rounded-lg bg-yellow-900/20 border border-yellow-700/30">
-                            <p className="text-xs text-yellow-400">
-                              <strong>Important:</strong> Cookies expire after a period of time (usually 1-2 weeks). If downloads start failing with "Sign in to confirm you're not a bot" errors, re-export fresh cookies from your browser and update the path.
-                            </p>
-                          </div>
-                        </div>
-
-                        {backendTestResult && (
-                          <div className={`rounded-lg p-3 text-sm ${
-                            backendTestResult.startsWith('✓')
-                              ? 'bg-green-900/30 border border-green-700/50 text-green-400'
-                              : 'bg-red-900/30 border border-red-700/50 text-red-400'
-                          }`}>
-                            {backendTestResult}
-                          </div>
-                        )}
-
-                        <div className="flex gap-3">
-                          <button
-                            onClick={() => updateAcquisitionBackend(acquisitionSettings.active_backend, backendCookiesFile)}
-                            disabled={backendBusy}
-                            className="rounded-xl bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-                          >
-                            {backendBusy ? 'Saving...' : 'Save Configuration'}
-                          </button>
-                          <button
-                            onClick={() => testAcquisitionBackend(acquisitionSettings.active_backend)}
-                            disabled={backendBusy}
-                            className="rounded-xl bg-gray-700 px-4 py-2 text-sm font-medium text-white hover:bg-gray-600 disabled:opacity-50"
-                          >
-                            {backendBusy ? 'Testing...' : 'Test Connection'}
-                          </button>
-                        </div>
-
-                        <div className="pt-3 border-t border-gray-800">
-                          <details className="text-xs text-gray-500">
-                            <summary className="cursor-pointer hover:text-gray-400">
-                              How to export cookies from your browser
-                            </summary>
-                            <div className="mt-3 space-y-2 pl-4">
-                              <p><strong>Chrome/Edge:</strong></p>
-                              <ol className="list-decimal list-inside space-y-1">
-                                <li>Install "Get cookies.txt LOCALLY" extension</li>
-                                <li>Navigate to youtube.com (while logged in)</li>
-                                <li>Click the extension icon and select "Export"</li>
-                                <li>Save the file and enter its path above</li>
-                              </ol>
-                              <p className="pt-2"><strong>Firefox:</strong></p>
-                              <ol className="list-decimal list-inside space-y-1">
-                                <li>Install "cookies.txt" extension</li>
-                                <li>Navigate to youtube.com (while logged in)</li>
-                                <li>Click the extension icon and export cookies</li>
-                                <li>Save the file and enter its path above</li>
-                              </ol>
-                            </div>
-                          </details>
-
-                          <details className="text-xs text-gray-500 mt-2">
-                            <summary className="cursor-pointer hover:text-gray-400">
-                              Troubleshooting: "Sign in to confirm you're not a bot" error
-                            </summary>
-                            <div className="mt-3 space-y-2 pl-4">
-                              <p><strong>This error means your cookies are expired or invalid. Try these steps:</strong></p>
-                              <ol className="list-decimal list-inside space-y-1">
-                                <li>Make sure you're logged into YouTube in your browser</li>
-                                <li>Export fresh cookies (cookies expire every 1-2 weeks)</li>
-                                <li>Verify the cookies file path is correct (use absolute path, not relative)</li>
-                                <li>Check the file exists: run <code className="bg-gray-800 px-1 rounded">ls -la /path/to/cookies.txt</code></li>
-                                <li>After updating cookies, click "Save Configuration" then "Test Connection"</li>
-                                <li>If still failing, try logging out and back into YouTube, then re-export cookies</li>
-                              </ol>
-                            </div>
-                          </details>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </CollapsiblePanel>
-
                 <CollapsibleSection
                   title="Run Pipeline"
                   icon={<PlayIcon className="h-5 w-5 text-gray-300" />}
@@ -2631,13 +2491,13 @@ export default function LibraryPage() {
                       </div>
                     </div>
 
-                    <aside className="rounded-2xl border border-gray-800 bg-gray-950/40 p-5 lg:sticky lg:top-6">
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-lg font-semibold">Song Info</h3>
+                    <aside className="rounded-2xl border border-gray-800 bg-gray-950/40 p-5 lg:sticky lg:top-6 overflow-hidden max-w-full">
+                      <div className="flex items-center justify-between gap-2">
+                        <h3 className="text-lg font-semibold truncate">Song Info</h3>
                         {selectedSongId && (
                           <button
                             onClick={() => setSelectedSongId(null)}
-                            className="rounded-full border border-gray-700 p-1 text-gray-400 hover:border-gray-500 hover:text-white"
+                            className="flex-shrink-0 rounded-full border border-gray-700 p-1 text-gray-400 hover:border-gray-500 hover:text-white"
                             title="Close"
                           >
                             <XMarkIcon className="h-4 w-4" />
@@ -2661,17 +2521,17 @@ export default function LibraryPage() {
 
                       {songDetail && !songDetailBusy && (
                         <div className="mt-4 space-y-4">
-                          <div className="flex items-center justify-between">
-                            <div>
+                          <div className="flex items-center justify-between gap-2 min-w-0">
+                            <div className="min-w-0 flex-1">
                               <p className="text-xs uppercase text-gray-500">Title</p>
-                              <p className="text-lg font-semibold text-white">
+                              <p className="text-lg font-semibold text-white truncate" title={songDetail.title || 'Untitled'}>
                                 {songDetail.title || 'Untitled'}
                               </p>
                             </div>
                             {!songEditMode && (
                               <button
                                 onClick={handleSongEdit}
-                                className="inline-flex items-center gap-2 rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:border-gray-500"
+                                className="flex-shrink-0 inline-flex items-center gap-2 rounded-full border border-gray-700 px-3 py-1 text-xs text-gray-200 hover:border-gray-500"
                               >
                                 <PencilSquareIcon className="h-4 w-4" />
                                 Edit
@@ -2787,40 +2647,51 @@ export default function LibraryPage() {
                                 >
                                   Cancel
                                 </button>
+                                <div className="flex-1" />
+                                <button
+                                  onClick={handleDeleteClick}
+                                  disabled={songSaveBusy}
+                                  className="rounded-full border border-red-700/50 px-4 py-2 text-sm text-red-400 hover:bg-red-900/30 hover:border-red-600 disabled:opacity-50 flex items-center gap-2"
+                                >
+                                  <TrashIcon className="h-4 w-4" />
+                                  Delete
+                                </button>
                               </div>
                             </div>
                           ) : (
                             <div className="space-y-3 text-sm text-gray-300">
-                              <div>
+                              <div className="min-w-0">
                                 <p className="text-xs uppercase text-gray-500">Artist</p>
                                 {songDetail.primary_artist_id ? (
                                   <Link
                                     href={`/artist/${songDetail.primary_artist_id}`}
-                                    className="text-white hover:underline"
+                                    className="text-white hover:underline block truncate"
+                                    title={songDetail.primary_artist_name || songDetail.artists?.[0]}
                                   >
                                     {songDetail.primary_artist_name || songDetail.artists?.[0]}{' '}
                                     <span className="text-xs text-gray-500">(profile)</span>
                                   </Link>
                                 ) : (
-                                  <p className="text-white">
+                                  <p className="text-white truncate" title={songDetail.primary_artist_name || songDetail.artists?.[0] || '--'}>
                                     {songDetail.primary_artist_name ||
                                       songDetail.artists?.[0] ||
                                       '--'}
                                   </p>
                                 )}
                               </div>
-                              <div>
+                              <div className="min-w-0">
                                 <p className="text-xs uppercase text-gray-500">Album</p>
                                 {songDetail.album_id ? (
                                   <Link
                                     href={`/album/${songDetail.album_id}`}
-                                    className="text-white hover:underline"
+                                    className="text-white hover:underline block truncate"
+                                    title={songDetail.album || 'Unknown album'}
                                   >
                                     {songDetail.album || 'Unknown album'}{' '}
                                     <span className="text-xs text-gray-500">(album)</span>
                                   </Link>
                                 ) : (
-                                  <p className="text-white">{songDetail.album || '--'}</p>
+                                  <p className="text-white truncate" title={songDetail.album || '--'}>{songDetail.album || '--'}</p>
                                 )}
                               </div>
                               <div className="grid gap-3 md:grid-cols-2">
@@ -2840,17 +2711,17 @@ export default function LibraryPage() {
                                   </p>
                                 </div>
                               </div>
-                              <div>
+                              <div className="min-w-0">
                                 <p className="text-xs uppercase text-gray-500">Genres</p>
-                                <p className="text-white">{formatList(songDetail.genres)}</p>
+                                <p className="text-white break-words">{formatList(songDetail.genres)}</p>
                               </div>
-                              <div>
+                              <div className="min-w-0">
                                 <p className="text-xs uppercase text-gray-500">Producers</p>
-                                <p className="text-white">{formatList(songDetail.producers)}</p>
+                                <p className="text-white break-words">{formatList(songDetail.producers)}</p>
                               </div>
-                              <div>
+                              <div className="min-w-0">
                                 <p className="text-xs uppercase text-gray-500">Labels</p>
-                                <p className="text-white">{formatList(songDetail.labels)}</p>
+                                <p className="text-white break-words">{formatList(songDetail.labels)}</p>
                               </div>
                               <div>
                                 <p className="text-xs uppercase text-gray-500">Verified</p>
@@ -3639,6 +3510,90 @@ export default function LibraryPage() {
             )}
           </div>
       </div>
+
+      {/* Delete Song Confirmation Modal */}
+      {showDeleteModal && songDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
+          <div className="mx-4 w-full max-w-md rounded-2xl bg-gray-900 p-6 shadow-2xl border border-gray-800">
+            <div className="flex items-start gap-4">
+              <div className="flex-shrink-0 p-2 rounded-full bg-red-900/30">
+                <ExclamationTriangleIcon className="h-6 w-6 text-red-400" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-lg font-semibold text-white">Delete Song</h3>
+                <p className="mt-2 text-sm text-gray-400">
+                  Are you sure you want to delete{' '}
+                  <span className="font-semibold text-white">{songDetail.title || 'this song'}</span>
+                  {songDetail.artists?.[0] && (
+                    <>
+                      {' '}by <span className="text-white">{songDetail.artists[0]}</span>
+                    </>
+                  )}
+                  ?
+                </p>
+                <p className="mt-2 text-sm text-gray-500">
+                  This will permanently remove the song and all associated data including:
+                </p>
+                <ul className="mt-1 text-xs text-gray-500 list-disc list-inside space-y-0.5">
+                  <li>Song metadata and associations</li>
+                  <li>Audio features and embeddings</li>
+                  <li>Play history and statistics</li>
+                  <li>Smart playlist memberships</li>
+                  <li>Album artwork associations</li>
+                </ul>
+
+                <label className="mt-4 flex items-center gap-3 text-sm text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={deleteFile}
+                    onChange={(e) => setDeleteFile(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-700 bg-gray-800 text-red-500 focus:ring-red-500"
+                  />
+                  <span>
+                    Also delete the audio file from disk
+                    <span className="block text-xs text-gray-500">
+                      (Cannot be undone)
+                    </span>
+                  </span>
+                </label>
+
+                {deleteError && (
+                  <div className="mt-3 rounded-lg bg-red-900/30 border border-red-700/50 p-3 text-sm text-red-300">
+                    {deleteError}
+                  </div>
+                )}
+
+                <div className="mt-5 flex items-center justify-end gap-3">
+                  <button
+                    onClick={handleDeleteCancel}
+                    disabled={deleteBusy}
+                    className="rounded-full border border-gray-700 px-4 py-2 text-sm text-gray-200 hover:border-gray-500 disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleDeleteConfirm}
+                    disabled={deleteBusy}
+                    className="rounded-full bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:opacity-50 flex items-center gap-2"
+                  >
+                    {deleteBusy ? (
+                      <>
+                        <span className="animate-spin">⏳</span>
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <TrashIcon className="h-4 w-4" />
+                        Delete Song
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -1779,6 +1779,146 @@ async def update_song(sha_id: str, payload: SongUpdateRequest) -> dict[str, Any]
     return detail
 
 
+@router.delete("/songs/{sha_id}")
+async def delete_song(sha_id: str, delete_file: bool = False) -> dict[str, Any]:
+    """Delete a song from the database.
+
+    This removes the song and all associated data:
+    - Song record from metadata.songs
+    - Artist associations from metadata.song_artists
+    - Genre associations from metadata.song_genres
+    - Label associations from metadata.song_labels
+    - Producer associations from metadata.song_producers
+    - File records from metadata.song_files
+    - Audio features from metadata.audio_features
+    - Embeddings from embeddings.vggish_embeddings
+    - Play sessions from play_sessions
+    - Smart playlist memberships from smart_playlist_songs
+    - Song images from media.song_images (image database)
+
+    Args:
+        sha_id: The SHA-256 hash ID of the song to delete
+        delete_file: If True, also delete the physical audio file from disk
+
+    Returns:
+        Dict with deletion status and details
+    """
+    sha_id = _normalize_sha_id(sha_id)
+
+    with get_connection() as conn:
+        with conn.cursor() as cur:
+            # First check if the song exists
+            cur.execute(
+                "SELECT title, album FROM metadata.songs WHERE sha_id = %s",
+                (sha_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise HTTPException(status_code=404, detail="Song not found.")
+
+            song_title = row[0]
+            song_album = row[1]
+
+            # Get file path if delete_file is requested
+            file_path = None
+            if delete_file:
+                cur.execute(
+                    "SELECT file_path FROM metadata.song_files WHERE sha_id = %s LIMIT 1",
+                    (sha_id,),
+                )
+                file_row = cur.fetchone()
+                if file_row:
+                    file_path = file_row[0]
+
+            # Delete from all related tables (order matters for foreign keys)
+            # Delete play events first (references play_sessions)
+            cur.execute(
+                """
+                DELETE FROM play_events
+                WHERE session_id IN (
+                    SELECT session_id FROM play_sessions WHERE sha_id = %s
+                )
+                """,
+                (sha_id,),
+            )
+
+            # Delete play sessions
+            cur.execute("DELETE FROM play_sessions WHERE sha_id = %s", (sha_id,))
+
+            # Delete smart playlist memberships
+            cur.execute("DELETE FROM smart_playlist_songs WHERE sha_id = %s", (sha_id,))
+
+            # Delete embeddings
+            cur.execute("DELETE FROM embeddings.vggish_embeddings WHERE sha_id = %s", (sha_id,))
+
+            # Delete audio features
+            cur.execute("DELETE FROM metadata.audio_features WHERE sha_id = %s", (sha_id,))
+
+            # Delete file records
+            cur.execute("DELETE FROM metadata.song_files WHERE sha_id = %s", (sha_id,))
+
+            # Delete associations
+            cur.execute("DELETE FROM metadata.song_artists WHERE sha_id = %s", (sha_id,))
+            cur.execute("DELETE FROM metadata.song_genres WHERE sha_id = %s", (sha_id,))
+            cur.execute("DELETE FROM metadata.song_labels WHERE sha_id = %s", (sha_id,))
+            cur.execute("DELETE FROM metadata.song_producers WHERE sha_id = %s", (sha_id,))
+
+            # Finally delete the song itself
+            cur.execute("DELETE FROM metadata.songs WHERE sha_id = %s", (sha_id,))
+
+        conn.commit()
+
+    # Delete from image database (separate connection)
+    try:
+        from backend.db.image_connection import get_connection as get_image_connection
+
+        with get_image_connection() as img_conn:
+            with img_conn.cursor() as img_cur:
+                img_cur.execute(
+                    "DELETE FROM media.song_images WHERE song_sha_id = %s",
+                    (sha_id,),
+                )
+            img_conn.commit()
+    except Exception:
+        # Image deletion is non-critical
+        pass
+
+    # Delete physical file if requested
+    file_deleted = False
+    if delete_file and file_path:
+        import os
+        from pathlib import Path
+
+        try:
+            path = Path(file_path)
+            if path.exists():
+                path.unlink()
+                file_deleted = True
+
+                # Also try to delete the metadata JSON sidecar if it exists
+                json_path = path.with_suffix(".json")
+                if json_path.exists():
+                    json_path.unlink()
+        except Exception:
+            # File deletion failure is non-critical
+            pass
+
+    emit_library_event(
+        "song_deleted",
+        sha_id=sha_id,
+        payload={"title": song_title, "album": song_album},
+    )
+
+    return {
+        "status": "success",
+        "sha_id": sha_id,
+        "title": song_title,
+        "album": song_album,
+        "file_deleted": file_deleted,
+        "message": f"Song '{song_title}' has been deleted from the library.",
+    }
+
+
 @router.post("/songs/link")
 async def link_songs_to_album(payload: LinkSongsRequest) -> dict[str, Any]:
     if not payload.sha_ids:
