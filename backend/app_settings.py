@@ -8,8 +8,11 @@ from typing import Any
 from backend.processing.acquisition_pipeline import config as acquisition_config
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+# Support Docker volume mounts via environment variables
+DATA_ROOT = Path(os.environ.get("SONGBASE_DATA_ROOT", str(REPO_ROOT)))
 DEFAULT_METADATA_DIR = Path(
-    os.environ.get("SONGBASE_METADATA_DIR", REPO_ROOT / ".metadata")
+    os.environ.get("SONGBASE_METADATA_DIR", str(DATA_ROOT / ".metadata"))
 )
 SETTINGS_PATH = DEFAULT_METADATA_DIR / "settings.json"
 
@@ -28,8 +31,10 @@ def _default_settings() -> dict[str, Any]:
         },
         "paths": {
             "preprocessed_cache_dir": str(acquisition_config.PREPROCESSED_CACHE_DIR),
-            "song_cache_dir": str(acquisition_config.REPO_ROOT / ".song_cache"),
+            "song_cache_dir": str(acquisition_config.SONG_CACHE_DIR),
             "metadata_dir": str(DEFAULT_METADATA_DIR),
+            "embeddings_dir": str(acquisition_config.EMBEDDINGS_DIR),
+            "songs_dir": str(acquisition_config.SONGS_DIR),
         },
         "vggish": {
             "target_sample_rate": 16000,

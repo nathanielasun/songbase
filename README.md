@@ -90,6 +90,100 @@ npm run dev
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
 
+## Docker Deployment
+
+Songbase can be deployed using Docker containers for easy setup and scalability.
+
+### Quick Start with Docker
+
+```bash
+# Clone the repository
+git clone <repo-url>
+cd songbase
+
+# Copy and configure environment variables
+cp .env.docker.example .env.docker
+# Edit .env.docker with your settings (especially POSTGRES_PASSWORD)
+
+# Build and start all services
+docker compose --env-file .env.docker up -d
+
+# View logs
+docker compose logs -f
+```
+
+Access the application at:
+- **Frontend**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Documentation**: http://localhost:8000/docs
+
+### Docker Architecture
+
+The Docker setup consists of three services:
+
+| Service | Description | Port |
+|---------|-------------|------|
+| `database` | PostgreSQL 16 with pgvector extension | 5432 |
+| `backend` | FastAPI Python backend | 8000 |
+| `frontend` | Next.js frontend | 3000 |
+
+### Configuration
+
+Environment variables can be set in `.env.docker`:
+
+```bash
+# Database credentials
+POSTGRES_USER=songbase
+POSTGRES_PASSWORD=your_secure_password
+
+# Optional: API credentials for enhanced metadata
+SPOTIFY_CLIENT_ID=your_spotify_client_id
+SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
+DISCOGS_USER_TOKEN=your_discogs_token
+
+# Optional: Mount your existing music library
+SONGS_DIR=/path/to/your/music
+```
+
+### Data Persistence
+
+Docker volumes are used for persistent storage:
+- `postgres_data` - Database files
+- `songs_data` - Music library
+- `song_cache` - SHA-256 hashed song cache
+- `embeddings` - VGGish embeddings
+- `metadata` - Application settings
+
+### Development with Docker
+
+For development with hot-reloading:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+```
+
+### Useful Commands
+
+```bash
+# Stop all services
+docker compose down
+
+# Stop and remove volumes (WARNING: deletes all data)
+docker compose down -v
+
+# Rebuild after code changes
+docker compose build --no-cache
+
+# View service status
+docker compose ps
+
+# Access database shell
+docker compose exec database psql -U songbase -d songbase_metadata
+
+# View backend logs
+docker compose logs -f backend
+```
+
 ## Optional: Multi-Source Metadata Configuration
 
 The metadata pipeline supports fetching images from multiple sources. **Spotify API access is optional** but recommended for better image coverage.
@@ -156,26 +250,41 @@ All verification and image fetching happens in a single operation, ensuring that
 
 ```
 songbase/
-├── frontend/           # Next.js TypeScript frontend
-│   ├── app/           # Next.js app directory
-│   ├── public/        # Static assets
+├── frontend/              # Next.js TypeScript frontend
+│   ├── app/               # Next.js app directory
+│   ├── components/        # React components
+│   ├── contexts/          # React contexts
+│   ├── public/            # Static assets
+│   ├── Dockerfile         # Production Docker image
+│   ├── Dockerfile.dev     # Development Docker image
 │   └── package.json
 ├── backend/
-│   ├── api/           # FastAPI REST API
-│   │   ├── routes/    # API endpoints
-│   │   └── app.py     # Main API application
-│   └── processing/    # Audio processing modules
-│       ├── mp3_to_pcm.py
-│       ├── orchestrator.py
-│       ├── pipeline_state.py
-│       ├── storage_utils.py
-│       └── audio_pipeline/
-├── backend/tests/      # Backend test suite
-├── songs/             # Music library (MP3 files)
-├── .metadata/         # Local Postgres data (ignored)
-├── .song_cache/       # SHA-256 hashed song database
-├── .embeddings/       # VGGish embedding files (SHA-named .npz)
-└── STATUS/            # Project planning and status docs (see STATUS/processing-backend-plan.md)
+│   ├── api/               # FastAPI REST API
+│   │   ├── routes/        # API endpoints
+│   │   └── app.py         # Main API application
+│   ├── db/                # Database migrations and connection
+│   │   ├── migrations/    # SQL migration files
+│   │   └── image_migrations/
+│   ├── processing/        # Audio processing modules
+│   │   ├── audio_pipeline/
+│   │   ├── feature_pipeline/
+│   │   ├── metadata_pipeline/
+│   │   └── acquisition_pipeline/
+│   ├── services/          # Business logic services
+│   ├── Dockerfile         # Production Docker image
+│   ├── Dockerfile.dev     # Development Docker image
+│   └── docker-entrypoint.sh
+├── database/              # Docker database initialization
+│   └── init/              # SQL/shell init scripts
+├── docker-compose.yml     # Production Docker configuration
+├── docker-compose.dev.yml # Development Docker override
+├── .env.docker.example    # Docker environment template
+├── backend/tests/         # Backend test suite
+├── songs/                 # Music library (MP3 files)
+├── .metadata/             # Local Postgres data (ignored)
+├── .song_cache/           # SHA-256 hashed song database
+├── .embeddings/           # VGGish embedding files
+└── STATUS/                # Project planning and status docs
 ```
 
 ## Development

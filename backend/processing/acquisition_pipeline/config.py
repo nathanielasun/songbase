@@ -7,8 +7,26 @@ BASE_DIR = Path(__file__).resolve().parent
 PROCESSING_DIR = BASE_DIR.parent
 REPO_ROOT = PROCESSING_DIR.parent.parent
 
-PREPROCESSED_CACHE_DIR = REPO_ROOT / "preprocessed_cache"
+# Support Docker volume mounts via environment variables
+# Fall back to local paths for non-Docker development
+DATA_ROOT = Path(os.environ.get("SONGBASE_DATA_ROOT", str(REPO_ROOT)))
+
+PREPROCESSED_CACHE_DIR = Path(
+    os.environ.get("SONGBASE_PREPROCESSED_CACHE_DIR", str(DATA_ROOT / "preprocessed_cache"))
+)
 PREPROCESSED_METADATA_SUFFIX = ".json"
+
+SONG_CACHE_DIR = Path(
+    os.environ.get("SONGBASE_SONG_CACHE_DIR", str(DATA_ROOT / ".song_cache"))
+)
+
+EMBEDDINGS_DIR = Path(
+    os.environ.get("SONGBASE_EMBEDDINGS_DIR", str(DATA_ROOT / ".embeddings"))
+)
+
+SONGS_DIR = Path(
+    os.environ.get("SONGBASE_SONGS_DIR", str(DATA_ROOT / "songs"))
+)
 
 SOURCES_PATH = BASE_DIR / "sources.jsonl"
 

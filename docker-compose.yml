@@ -1,0 +1,120 @@
+# Songbase Docker Compose Configuration
+# This file defines the multi-container architecture for the music streaming platform
+
+services:
+  # PostgreSQL database with pgvector extension
+  database:
+    image: pgvector/pgvector:pg16
+    container_name: songbase-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-songbase}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-songbase}
+      POSTGRES_DB: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "${DB_PORT:-5432}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-songbase} -d postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - songbase-network
+
+  # FastAPI Backend
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: songbase-backend
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      # Database connections
+      SONGBASE_DATABASE_URL: postgresql://${POSTGRES_USER:-songbase}:${POSTGRES_PASSWORD:-songbase}@database:5432/songbase_metadata
+      SONGBASE_IMAGE_DATABASE_URL: postgresql://${POSTGRES_USER:-songbase}:${POSTGRES_PASSWORD:-songbase}@database:5432/songbase_images
+      # Skip local DB bootstrap since we're using Docker
+      SONGBASE_SKIP_DB_BOOTSTRAP: "1"
+      # Connection pool settings
+      SONGBASE_DB_POOL_MIN: "2"
+      SONGBASE_DB_POOL_MAX: "10"
+      # Docker data paths
+      SONGBASE_DATA_ROOT: "/data"
+      SONGBASE_METADATA_DIR: "/data/metadata"
+      SONGBASE_PREPROCESSED_CACHE_DIR: "/data/preprocessed_cache"
+      SONGBASE_SONG_CACHE_DIR: "/data/song_cache"
+      SONGBASE_EMBEDDINGS_DIR: "/data/embeddings"
+      SONGBASE_SONGS_DIR: "/data/songs"
+      # Optional: Spotify API credentials
+      SPOTIFY_CLIENT_ID: ${SPOTIFY_CLIENT_ID:-}
+      SPOTIFY_CLIENT_SECRET: ${SPOTIFY_CLIENT_SECRET:-}
+      # Optional: Discogs API credentials
+      DISCOGS_USER_TOKEN: ${DISCOGS_USER_TOKEN:-}
+    volumes:
+      # Persistent data volumes
+      - songs_data:/data/songs
+      - song_cache:/data/song_cache
+      - embeddings:/data/embeddings
+      - preprocessed_cache:/data/preprocessed_cache
+      - metadata:/data/metadata
+      # Mount local songs directory (optional, for importing existing library)
+      - ${SONGS_DIR:-./songs}:/data/import:ro
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - songbase-network
+
+  # Next.js Frontend
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: songbase-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    networks:
+      - songbase-network
+
+# Named volumes for persistent data
+volumes:
+  postgres_data:
+    driver: local
+  songs_data:
+    driver: local
+  song_cache:
+    driver: local
+  embeddings:
+    driver: local
+  preprocessed_cache:
+    driver: local
+  metadata:
+    driver: local
+
+# Network for inter-service communication
+networks:
+  songbase-network:
+    driver: bridge

@@ -14,9 +14,20 @@ app = FastAPI(
     version="1.0.0"
 )
 
+# CORS origins - support both local development and Docker
+cors_origins = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://frontend:3000",  # Docker service name
+]
+# Allow additional origins from environment variable (comma-separated)
+extra_origins = os.environ.get("SONGBASE_CORS_ORIGINS", "")
+if extra_origins:
+    cors_origins.extend([o.strip() for o in extra_origins.split(",") if o.strip()])
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -72,6 +83,7 @@ async def root():
 
 
 @app.get("/health")
+@app.get("/api/health")
 async def health():
     """Health check with connection pool stats."""
     try:

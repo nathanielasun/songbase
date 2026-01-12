@@ -28,7 +28,9 @@ songbase/
 │   │   ├── stats/     # Statistics components
 │   │   └── features/  # Audio feature display components
 │   ├── public/        # Static assets
-│   ├── next.config.ts # Next.js configuration (API proxy)
+│   ├── next.config.ts # Next.js configuration (API proxy, Docker support)
+│   ├── Dockerfile     # Production Docker image (multi-stage build)
+│   ├── Dockerfile.dev # Development Docker image (hot reload)
 │   ├── package.json   # Frontend dependencies (includes recharts)
 │   └── tsconfig.json  # TypeScript configuration
 ├── backend/
@@ -48,6 +50,9 @@ songbase/
 │   │   │   └── library_events.py - Library event hub + smart playlist refresh signals
 │   │   ├── app.py            - Main FastAPI application with CORS
 │   │   └── requirements.txt  - API dependencies
+│   ├── Dockerfile            - Production Docker image (multi-stage)
+│   ├── Dockerfile.dev        - Development Docker image
+│   └── docker-entrypoint.sh  - Container startup script
 │   ├── bootstrap.py     - Python dependency bootstrapper
 │   ├── app_settings.py  - Persistent UI settings stored under .metadata
 │   ├── db/            # Postgres schema + ingestion tools
@@ -162,6 +167,14 @@ songbase/
 ├── scripts/
 │   ├── build_unix.sh     - Builds standalone binary with bundled ffmpeg
 │   └── use_local_python.sh - Run project modules via the local venv
+├── database/            # Docker database initialization
+│   └── init/            # SQL/shell scripts for PostgreSQL container
+│       ├── 01-create-databases.sql - Creates metadata and images databases
+│       ├── 02-init-metadata.sh     - Initializes metadata schema and migrations
+│       └── 03-init-images.sh       - Initializes images schema
+├── docker-compose.yml   # Production Docker configuration
+├── docker-compose.dev.yml # Development Docker override (hot reload)
+├── .env.docker.example  # Docker environment variable template
 ├── songs/               # Music library (MP3 files)
 ├── preprocessed_cache/  # Downloaded MP3s + JSON metadata sidecars
 ├── .metadata/           # Local Postgres data (ignored)
