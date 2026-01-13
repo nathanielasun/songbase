@@ -543,26 +543,6 @@ export default function SettingsPage() {
               <p className="text-sm text-red-200/80 mt-2">
                 Reset stored data to recover from pipeline issues. This is permanent.
               </p>
-
-              <div className="mt-4 mb-6 flex items-center justify-between rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
-                <div>
-                  <span className="font-semibold text-red-100">Clear liked/disliked preferences</span>
-                  <span className="block text-xs text-red-200/70">
-                    Removes all liked and disliked song preferences stored in your browser.
-                  </span>
-                </div>
-                <button
-                  onClick={() => {
-                    if (window.confirm('Clear all liked/disliked song preferences? This cannot be undone.')) {
-                      localStorage.removeItem('songbase_user_preferences');
-                      setStatusMessage('Preferences cleared. Refresh the page to see changes.');
-                    }
-                  }}
-                  className="shrink-0 rounded-full border border-red-400 bg-red-500/20 px-4 py-2 text-sm font-semibold text-red-100 hover:bg-red-500/30"
-                >
-                  Clear Preferences
-                </button>
-              </div>
               <div className="mt-4 grid gap-3 text-sm text-red-100">
                 <label className="flex items-start gap-3 rounded-xl border border-red-500/30 bg-red-500/10 px-4 py-3">
                   <input
