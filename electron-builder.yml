@@ -1,0 +1,159 @@
+# Electron Builder Configuration for Songbase
+# Cross-platform desktop application build configuration
+
+appId: com.songbase.app
+productName: Songbase
+copyright: Copyright © 2024 Songbase
+
+directories:
+  output: dist-electron
+  buildResources: build
+
+# Files to include in the application
+files:
+  - electron/**/*
+  - frontend/.next/**/*
+  - frontend/public/**/*
+  - frontend/package.json
+  - frontend/next.config.ts
+  - frontend/node_modules/**/*
+  - "!**/*.map"
+  - "!**/node_modules/*/{CHANGELOG.md,README.md,README,readme.md,readme}"
+  - "!**/node_modules/*/{test,__tests__,tests,powered-test,example,examples}"
+  - "!**/node_modules/*.d.ts"
+  - "!**/*.{iml,o,hprof,orig,pyc,pyo,rbc,swp,csproj,sln,xproj}"
+  - "!.editorconfig"
+  - "!**/._*"
+  - "!**/{.DS_Store,.git,.hg,.svn,CVS,RCS,SCCS,.gitignore,.gitattributes}"
+
+# Extra resources bundled with the app (outside asar)
+extraResources:
+  # Backend Python binary
+  - from: dist/songbase-api
+    to: backend
+    filter:
+      - "**/*"
+  # PostgreSQL bundle (platform-specific)
+  - from: .metadata/postgres_bundle
+    to: postgres
+    filter:
+      - "**/*"
+  # FFmpeg binary for audio processing
+  - from: backend/processing/bin
+    to: bin
+    filter:
+      - "ffmpeg*"
+      - "ffprobe*"
+
+# macOS specific configuration
+mac:
+  category: public.app-category.music
+  icon: build/icon.icns
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  darkModeSupport: true
+  target:
+    - target: dmg
+      arch:
+        - x64
+        - arm64
+    - target: zip
+      arch:
+        - x64
+        - arm64
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  # Code signing (configure via environment variables)
+  # CSC_LINK: path to .p12 certificate
+  # CSC_KEY_PASSWORD: certificate password
+  # APPLE_ID: for notarization
+  # APPLE_APP_SPECIFIC_PASSWORD: for notarization
+
+# macOS DMG configuration
+dmg:
+  backgroundColor: "#1a1a2e"
+  icon: build/icon.icns
+  iconSize: 100
+  contents:
+    - x: 130
+      y: 220
+    - x: 410
+      y: 220
+      type: link
+      path: /Applications
+  window:
+    width: 540
+    height: 380
+
+# Windows specific configuration
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+    - target: portable
+      arch:
+        - x64
+  # Code signing (configure via environment variables)
+  # CSC_LINK: path to .pfx certificate
+  # CSC_KEY_PASSWORD: certificate password
+
+# Windows NSIS installer configuration
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Songbase
+
+# Linux specific configuration
+linux:
+  icon: build/icons
+  category: AudioVideo
+  desktop:
+    Name: Songbase
+    Comment: Personal music streaming platform
+    Categories: AudioVideo;Audio;Music;Player
+    Keywords: music;audio;streaming;player
+  target:
+    - target: AppImage
+      arch:
+        - x64
+    - target: deb
+      arch:
+        - x64
+    - target: rpm
+      arch:
+        - x64
+
+# Debian package configuration
+deb:
+  depends:
+    - libgtk-3-0
+    - libnotify4
+    - libnss3
+    - libxss1
+    - libxtst6
+    - xdg-utils
+    - libatspi2.0-0
+    - libuuid1
+    - libsecret-1-0
+
+# Auto-update configuration (publish to GitHub Releases)
+publish:
+  provider: github
+  owner: ${GH_OWNER:-songbase}
+  repo: ${GH_REPO:-songbase}
+  releaseType: release
+
+# Build hooks
+afterSign: scripts/notarize.js
+
+# Compression
+compression: maximum

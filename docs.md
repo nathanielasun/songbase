@@ -1899,10 +1899,22 @@ Songbase can be packaged as a standalone desktop application using Electron, sim
 ```
 songbase/
 ├── electron/
-│   ├── main.js        # Electron main process (manages windows, backend)
-│   └── preload.js     # Preload script (security bridge)
-├── songbase-api.spec  # PyInstaller spec for FastAPI backend
-└── package.json       # Root package.json with Electron dependencies
+│   ├── main.js              # Electron main process (windows, backend, auto-updates)
+│   └── preload.js           # Preload script (security bridge + update API)
+├── build/
+│   ├── icon.icns            # macOS app icon
+│   ├── icon.ico             # Windows app icon
+│   ├── icons/               # Linux icons (multiple sizes)
+│   └── entitlements.mac.plist  # macOS code signing entitlements
+├── scripts/
+│   ├── build_desktop.sh     # Complete build pipeline
+│   ├── build_icons.sh       # Icon generation script
+│   └── notarize.js          # macOS notarization hook
+├── .github/workflows/
+│   └── build-desktop.yml    # CI/CD pipeline for cross-platform builds
+├── electron-builder.yml     # Electron builder configuration
+├── songbase-api.spec        # PyInstaller spec for FastAPI backend
+└── package.json             # Root package.json with Electron dependencies
 ```
 
 ### electron/main.js
@@ -1912,12 +1924,21 @@ songbase/
   - Creates the application window
   - Loads the Next.js frontend (static files in production, dev server in development)
   - Manages backend lifecycle (stops backend when app closes)
+  - Auto-update checking via electron-updater (GitHub Releases)
+  - IPC handlers for renderer update control
 - **Development Mode**: Loads `http://localhost:3000`, expects manually-started backend
 - **Production Mode**: Loads static files from `frontend/out/`, starts bundled backend binary
 
 ### electron/preload.js
 - **Purpose**: Security bridge between Electron and web content
-- **Exposes**: `window.electron` API with platform info and API URL
+- **Exposes**: `window.electron` API with:
+  - `platform`: Current OS platform
+  - `apiUrl`: Backend API URL
+  - `updates.checkForUpdates()`: Manual update check
+  - `updates.downloadUpdate()`: Download available update
+  - `updates.installUpdate()`: Install and restart
+  - `updates.getAppVersion()`: Get current version
+  - `updates.onUpdateStatus(callback)`: Listen for update events
 
 ### songbase-api.spec
 - **Purpose**: PyInstaller specification for bundling FastAPI backend
@@ -1940,15 +1961,68 @@ songbase/
 ### scripts/build_desktop.sh
 - **Purpose**: Complete desktop app build pipeline
 - **Steps**:
-  1. Builds FastAPI backend with PyInstaller → `dist/songbase-api`
-  2. Builds Next.js frontend with static export → `frontend/out/`
-  3. Installs Electron dependencies
-  4. Packages everything with electron-builder → `dist-electron/`
+  1. Checks prerequisites (python3, node, npm, PyInstaller)
+  2. Generates app icons for all platforms (via build_icons.sh)
+  3. Creates PostgreSQL bundle (optional, for bundled DB)
+  4. Builds FastAPI backend with PyInstaller → `dist/songbase-api`
+  5. Builds Next.js frontend with static export → `frontend/out/`
+  6. Installs Electron dependencies
+  7. Packages everything with electron-builder → `dist-electron/`
 - **Output**: Platform-specific installers (.dmg, .exe, .AppImage, etc.)
+- **Options**:
+  - `--skip-icons`: Skip icon generation
+  - `--skip-postgres`: Skip PostgreSQL bundle
+  - `--skip-backend`: Skip PyInstaller build
+  - `--skip-frontend`: Skip Next.js build
+  - `--platform PLAT`: Build for specific platform (mac, win, linux, all)
+  - `--verbose, -v`: Verbose output
 - **Usage**:
   ```bash
   ./scripts/build_desktop.sh
+  ./scripts/build_desktop.sh --platform mac --skip-postgres
   ```
+
+### electron-builder.yml
+- **Purpose**: Electron builder configuration
+- **Key Settings**:
+  - `appId`: com.songbase.app
+  - `extraResources`: Backend binary, PostgreSQL bundle, ffmpeg
+  - `mac`: DMG/ZIP targets, hardened runtime, notarization
+  - `win`: NSIS installer, portable exe
+  - `linux`: AppImage, deb, rpm packages
+  - `publish`: GitHub Releases for auto-updates
+
+### build/entitlements.mac.plist
+- **Purpose**: macOS entitlements for hardened runtime
+- **Enables**:
+  - JIT compilation (for bundled Python)
+  - Unsigned executable memory
+  - Dyld environment variables
+  - Disabled library validation (for bundled binaries)
+  - Network client/server access
+  - File access and audio input
+
+### scripts/notarize.js
+- **Purpose**: macOS notarization after code signing
+- **Environment Variables**:
+  - `APPLE_ID`: Apple Developer account email
+  - `APPLE_APP_SPECIFIC_PASSWORD`: App-specific password
+  - `APPLE_TEAM_ID`: Developer team ID
+
+### .github/workflows/build-desktop.yml
+- **Purpose**: CI/CD pipeline for cross-platform builds
+- **Triggers**: Push tags (v*), manual dispatch
+- **Jobs**:
+  1. `build-backend`: Builds PyInstaller binary for each platform (macOS arm64/x64, Linux x64, Windows x64)
+  2. `build-frontend`: Builds Next.js static export
+  3. `package-electron`: Downloads artifacts and packages with electron-builder
+  4. `release`: Creates GitHub Release with all artifacts (on tag push)
+- **Secrets Required**:
+  - `MACOS_CERTIFICATE_BASE64`: Base64-encoded .p12 certificate
+  - `MACOS_CERTIFICATE_PASSWORD`: Certificate password
+  - `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`: For notarization
+  - `WINDOWS_CERTIFICATE_BASE64`: Base64-encoded .pfx certificate
+  - `WINDOWS_CERTIFICATE_PASSWORD`: Certificate password
 
 ### package.json (root)
 - **Purpose**: Electron project configuration
@@ -2038,11 +2112,25 @@ After building, distribute the files from `dist-electron/`:
 
 ### Updating the App
 
-To add features:
+**Development Workflow:**
 1. Develop in web mode (`./dev.sh`)
 2. Test in Electron dev mode (`npm run electron:dev`)
 3. Build production app (`./scripts/build_desktop.sh`)
-4. Distribute new version
+
+**Release Workflow with CI/CD:**
+1. Bump version in `package.json`
+2. Commit and tag: `git tag v1.0.0`
+3. Push: `git push origin v1.0.0`
+4. GitHub Actions builds for all platforms
+5. Draft release appears in GitHub Releases
+6. Review, edit release notes, and publish
+7. Users with the app get notified via auto-updater
+
+**Auto-Update Behavior:**
+- App checks for updates 5 seconds after launch
+- If update available, prompts user to download
+- After download, prompts to restart and install
+- Updates are installed on app quit if user clicks "Later"
 
 ## Multi-Source Metadata & Image Acquisition
 

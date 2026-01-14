@@ -97,16 +97,8 @@ Songbase can be deployed using Docker containers for easy setup and scalability.
 ### Quick Start with Docker
 
 ```bash
-# Clone the repository
-git clone <repo-url>
-cd songbase
-
-# Copy and configure environment variables
-cp .env.docker.example .env.docker
-# Edit .env.docker with your settings (especially POSTGRES_PASSWORD)
-
-# Build and start all services
-docker compose --env-file .env.docker up -d
+# Build and start all services (no configuration required)
+docker compose up -d
 
 # View logs
 docker compose logs -f
@@ -127,15 +119,11 @@ The Docker setup consists of three services:
 | `backend` | FastAPI Python backend | 8000 |
 | `frontend` | Next.js frontend | 3000 |
 
-### Configuration
+### Configuration (Optional)
 
-Environment variables can be set in `.env.docker`:
+The Docker setup works out of the box with no configuration needed. For customization, copy `.env.docker.example` to `.env.docker`:
 
 ```bash
-# Database credentials
-POSTGRES_USER=songbase
-POSTGRES_PASSWORD=your_secure_password
-
 # Optional: API credentials for enhanced metadata
 SPOTIFY_CLIENT_ID=your_spotify_client_id
 SPOTIFY_CLIENT_SECRET=your_spotify_client_secret
@@ -143,7 +131,14 @@ DISCOGS_USER_TOKEN=your_discogs_token
 
 # Optional: Mount your existing music library
 SONGS_DIR=/path/to/your/music
+
+# Optional: Custom ports
+# DB_PORT=5432
+# BACKEND_PORT=8000
+# FRONTEND_PORT=3000
 ```
+
+Then run with: `docker compose --env-file .env.docker up -d`
 
 ### Data Persistence
 
@@ -560,16 +555,53 @@ Songbase can be packaged as a standalone desktop application (like Spotify) usin
 ```
 
 This will:
-1. Bundle the FastAPI backend into a standalone binary (PyInstaller)
-2. Build the Next.js frontend as static files
-3. Package everything with Electron
-4. Create platform-specific installers in `dist-electron/`
+1. Generate app icons for all platforms
+2. Bundle PostgreSQL for embedded database
+3. Bundle the FastAPI backend into a standalone binary (PyInstaller)
+4. Build the Next.js frontend as static files
+5. Package everything with Electron
+6. Create platform-specific installers in `dist-electron/`
+
+**Build Options:**
+```bash
+./scripts/build_desktop.sh --help              # Show all options
+./scripts/build_desktop.sh --skip-icons        # Skip icon generation
+./scripts/build_desktop.sh --skip-postgres     # Skip PostgreSQL bundle
+./scripts/build_desktop.sh --platform mac      # Build only for macOS
+./scripts/build_desktop.sh --verbose           # Verbose output
+```
 
 ### Platform-Specific Outputs
 
-- **macOS**: `.dmg` and `.zip` files
+- **macOS**: `.dmg` and `.zip` files (Intel + Apple Silicon)
 - **Windows**: `.exe` installer and portable `.exe`
-- **Linux**: `.AppImage` and `.deb` packages
+- **Linux**: `.AppImage`, `.deb`, and `.rpm` packages
+
+### Auto-Updates
+
+The desktop app includes automatic update checking via GitHub Releases. When a new version is available, users are prompted to download and install it.
+
+### Code Signing (Production)
+
+For distributing signed builds, configure environment variables:
+
+**macOS:**
+- `CSC_LINK`: Path to or base64 of .p12 certificate
+- `CSC_KEY_PASSWORD`: Certificate password
+- `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`: For notarization
+
+**Windows:**
+- `CSC_LINK`: Path to or base64 of .pfx certificate
+- `CSC_KEY_PASSWORD`: Certificate password
+
+### CI/CD Pipeline
+
+The `.github/workflows/build-desktop.yml` workflow automatically builds cross-platform releases when you push a version tag:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
 
 ### Development with Electron
 

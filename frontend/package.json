@@ -6,6 +6,7 @@
     "dev": "NODE_NO_WARNINGS=1 next dev",
     "dev:debug": "next dev",
     "build": "next build",
+    "build:webpack": "next build --no-turbo",
     "start": "next start",
     "lint": "eslint"
   },
